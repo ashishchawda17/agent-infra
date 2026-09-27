@@ -75,7 +75,7 @@ Resolve the vault root as `$BRAIN_ROOT` (else the current project dir / cwd). Al
      - **Never edit `wiki/hot.md` with the file-editing tools.** The whole point is that the check and the write are one operation; an edit made by hand is exactly the unguarded rewrite this replaces.
    - Update the `_Last refreshed:_` date.
    - **Rewrite** "Current focus" to only what is actually in flight *now*. **Delete** any bullet describing a prior session or work that's finished — do not add "Prior session:" bullets, ever.
-   - **Hard budget: after your edit, the whole file must be ≤ 500 words.** If it's over, keep cutting — oldest/stalest bullets first — until it isn't. Roughly: if a bullet wouldn't change what the next session does, it goes.
+   - **Hard budget: after your edit, the whole file must be ≤ 500 words.** If it's over, keep cutting — oldest/stalest bullets first — until it isn't. Roughly: if a bullet wouldn't change what the next session does, it goes. **The trim is yours to make:** stalest bullets first, `check-hot-budget.sh` is the only judge, and you never ask the user or anyone else which bullets to cut or to review the cuts (the dirty-file ask above is a different question and stays). Being near 500 words is fine — the budget is a ceiling, not a target.
    - **The budget is enforced by a script, not by your judgement.** Don't eyeball it and don't hand-count — after the rewrite, run the guard:
      ```bash
      bash "${CLAUDE_PLUGIN_ROOT}/bin/check-hot-budget.sh"   # from the vault root, or with BRAIN_ROOT=<vault> set

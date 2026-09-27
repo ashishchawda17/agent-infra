@@ -366,6 +366,22 @@ for words in 120 500 709; do
     "ask 2: report the number on every path" "$(evidence "$BOX")"
 done
 
+# --- 16. save step 3 says the trim is the agent's, not the user's -------
+# INNOV-299: step 3 said what to cut but never who decides, and its only other
+# instruction was "ask before continuing" (dirty hot.md), so an agent asked the
+# user which bullets to cut. The script is the judge; nobody else is asked.
+echo "--- 16. save step 3 trim is automatic ---"
+STEP3="$(awk '/^3\. \*\*Refresh `wiki\/hot.md`/{on=1} /^4\. \*\*Append/{on=0} on' \
+  "$REPO_ROOT/brain/skills/save/SKILL.md")"
+for want in \
+  'never ask the user or anyone else which bullets to cut' \
+  'a ceiling, not a target' \
+  'ask before continuing' \
+  'relay the script'"'"'s `HOT-BUDGET: OVER` line to the user **verbatim**'; do
+  assert_contains "save-step3/has:$want" "$want" "$STEP3" \
+    "brain/skills/save/SKILL.md step 3 must keep this sentence"
+done
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"
