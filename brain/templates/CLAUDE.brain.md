@@ -117,6 +117,8 @@ BRAIN_ROOT=<vault> bash "${CLAUDE_PLUGIN_ROOT}/bin/file-finding.sh" <defect-clas
 ```
 Evidence is paths, counts and identifiers only — never file contents or secrets. `/brain:save` files it to the tracker committed in this vault's `brain.json`; if that is unset, the finding stays queued and the save asks where it should go.
 
+**Never send a brain or plugin defect to a vendor or host feedback channel** (a tool that drafts feedback or bug reports to the maker of your agent host or model) — the content is internal (repo paths, vault state, ticket keys, collaborator names) and the vendor cannot act on a defect in this plugin; `file-finding.sh` is the only route.
+
 ## Repos this brain covers
 
 The **Scope** column is the recorded code-graph scope for each repo (set by `/brain:init` from the per-stack table above) — authoritative, so builds are identical for everyone. The **Carve-out** column is the committed file that *implements* that scope; a scope row with no carve-out is a statement nothing enforces.
