@@ -230,6 +230,22 @@ else
   pass "escape/line-is-valid-json (node unavailable — skipped)"
 fi
 
+# --- 9. the shipped template routes defects here, never to a vendor --------
+# INNOV-308: an agent drafted plugin feedback to a vendor feedback tool because
+# nothing said not to. The route and the prohibition must ship in the template
+# every vault is seeded from, and init must offer them to older vaults.
+echo "--- 9. template names the route and the prohibition ---"
+TPL="$REPO_ROOT/brain/templates/CLAUDE.brain.md"
+PROHIBIT='never send a brain or plugin defect to a vendor or host feedback channel'
+route_ok() { grep -q 'file-finding\.sh' "$1" && grep -qi "$PROHIBIT" "$1"; }
+route_ok "$TPL" && pass "template/route-and-prohibition"   || fail "template/route-and-prohibition" "$TPL must name file-finding.sh and: $PROHIBIT"
+sb_new
+sed 's/$//' "$TPL" >"$BOX/crlf.md"
+route_ok "$BOX/crlf.md" && pass "template/crlf-still-matches"   || fail "template/crlf-still-matches" "a CRLF vault copy lost the match"
+grep -vi "$PROHIBIT" "$TPL" >"$BOX/stripped.md"
+route_ok "$BOX/stripped.md" && fail "template/negative-control" "check passed with the prohibition removed"   || pass "template/negative-control"
+grep -q 'does \*\*not\*\* name `file-finding.sh`' "$REPO_ROOT/brain/skills/init/SKILL.md"   && pass "init/offers-block-to-existing-vaults"   || fail "init/offers-block-to-existing-vaults" "init must offer the findings block to a CLAUDE.md lacking file-finding.sh"
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"

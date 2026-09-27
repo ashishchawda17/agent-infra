@@ -84,6 +84,7 @@ A user/org-level list of known vaults at **`~/.claude/brain/registry.json`** (cr
    - Do **not** run the skeleton/template `cp` commands over it — that would clobber the user's `CLAUDE.md`, `wiki/`, `.graphifyignore`, etc.
    - Create only **missing** governance files from templates (skip any that exist): e.g. `[ -f "<vault>/.saveinclude" ] || cp "${CLAUDE_PLUGIN_ROOT}/templates/saveinclude" "<vault>/.saveinclude"` (same pattern for `.gitignore`). **Leave `CLAUDE.md` and `.graphifyignore` untouched** — they're user content.
    - If `CLAUDE.md` has **no** "3-step query rule" section, *offer* to merge one in from `${CLAUDE_PLUGIN_ROOT}/templates/CLAUDE.brain.md` — **ask first via AskUserQuestion, never auto-edit** an existing CLAUDE.md.
+   - Likewise, if `CLAUDE.md` does **not** name `file-finding.sh`, *offer* to merge the template's "Found a bug in the brain plugin itself?" block (the findings route and its vendor-feedback-channel prohibition) — same rule, ask first. A vault seeded from an older template has the query-rule section but not this block, so the check above never offers it.
    - Register it in the registry; skip all scaffolding.
 
    **(b) New / empty vault → full scaffold:**
