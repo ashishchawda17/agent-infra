@@ -26,6 +26,7 @@
 #                                checkout has drifted, one "DRIFT: ..." line
 #   resume-brief.sh --cat PATH   PATH's content from the briefing ref; exit 1 if absent
 #   resume-brief.sh --logs       the newest 3 logs/YYYY-MM-DD-*.md paths, oldest first
+#   resume-brief.sh --backlog    one "Harvest: ... · Drafts: ..." line, or nothing (INNOV-295)
 # Always exit 0 except --cat on a missing path. Degrades to the working tree when
 # origin/<default> cannot be resolved — a briefing that cannot reach the remote is
 # still a briefing, it just must not claim to be current.
@@ -83,6 +84,82 @@ case "${1:-}" in
     else
       (cd "$VAULT" 2>/dev/null && ls -1 logs/* 2>/dev/null)
     fi | grep -E '^logs/[0-9]{4}-[0-9]{2}-[0-9]{2}-.*\.md$' | sort | tail -n 3
+    exit 0
+    ;;
+  --backlog)
+    # INNOV-295: harvest and ingest are both manual and wired into nothing, so a
+    # growing raw pile or a stalled harvest is invisible unless someone counts.
+    # One line, or nothing when neither source exists. Context, never a gate.
+    #
+    # chats/ is the one input read from the WORKING TREE: it is gitignored, so it
+    # never reaches origin — and being untracked, it holds the same bytes whatever
+    # branch the checkout is stuck on, so drift cannot skew it. Counts come from
+    # each digest's own status: frontmatter, not .harvest-manifest.json (which
+    # tracks transcripts consumed, a different question).
+    # wiki/_drafts/ is tracked, so it is read from $REF like everything else.
+    # One process per source: a git show per draft costs ~1.3 s each on Windows.
+    TODAY="$(date +%Y-%m-%d)"
+    # The TTL lives in exactly one place, promote's prose; unreadable => no clause.
+    TTL="$(grep -oE 'TTL [0-9]+ days' "$BIN_DIR/../skills/promote/SKILL.md" 2>/dev/null | head -n 1 | grep -oE '[0-9]+')"
+    JD='function jd(s,  y, m) { y = substr(s, 1, 4) + 0; m = substr(s, 6, 2) + 0
+          if (m < 3) { y--; m += 12 }
+          return int(365.25 * (y + 4716)) + int(30.6001 * (m + 1)) + substr(s, 9, 2) }
+        function isdate(s) { return s ~ /^[0-9][0-9][0-9][0-9]-[0-9][0-9]-[0-9][0-9]/ }'
+
+    harvest=""
+    if [[ -d "$VAULT/chats" ]]; then
+      # Per-file "<status> <date>" from the frontmatter, then one aggregate
+      # (find may split files across several awk runs).
+      harvest="$(find "$VAULT/chats" -type f -name '*.md' -exec awk '
+          FNR == 1 { fm = 0; st = ""; dt = "" }
+          { sub(/\r$/, "") }
+          FNR == 1 && $0 == "---" { fm = 1; next }
+          fm && $0 == "---" { print (st == "" ? "-" : st), (dt == "" ? "-" : dt); fm = 0; next }
+          fm && /^status:/ { st = $2 }
+          fm && /^date:/ { dt = $2 }
+        ' {} + 2>/dev/null | awk -v today="$TODAY" "$JD"'
+          { n++; if ($1 == "raw") raw++; else if ($1 == "ingested") ing++
+            if (isdate($2) && $2 > newest) newest = substr($2, 1, 10) }
+          END {
+            if (!n) exit
+            s = "Harvest: " (raw + 0) " raw / " (ing + 0) " ingested"
+            if (newest != "") {
+              s = s ", newest " newest
+              age = jd(today) - jd(newest)
+              if (age > 0) s = s " (" age " day" (age == 1 ? "" : "s") " old)"
+            }
+            print s
+          }')"
+    fi
+
+    # Drafts: the count, then "path:key: value" date lines, same shape either way.
+    # Age is the OLDEST of date/created/last_verified; an undated draft counts
+    # toward the total but never toward past-TTL.
+    if [[ -n "$REF" ]]; then
+      dnames="$(cd "$VAULT" && MSYS_NO_PATHCONV=1 git ls-tree --name-only "$REF" wiki/_drafts/ 2>/dev/null | grep -c '\.md$')"
+      ddates="$(cd "$VAULT" && MSYS_NO_PATHCONV=1 git grep -I -E '^(date|created|last_verified):' "$REF" -- 'wiki/_drafts/*.md' 2>/dev/null | sed "s|^$REF:||")"
+    else
+      dnames="$(cd "$VAULT" 2>/dev/null && ls -1 wiki/_drafts/*.md 2>/dev/null | grep -c '\.md$')"
+      ddates="$(cd "$VAULT" 2>/dev/null && grep -H -E '^(date|created|last_verified):' wiki/_drafts/*.md 2>/dev/null)"
+    fi
+    drafts=""
+    if [[ "${dnames:-0}" -gt 0 ]]; then
+      drafts="Drafts: $dnames"
+      if [[ -n "$TTL" ]]; then
+        past="$(printf '%s\n' "$ddates" | awk -v today="$TODAY" -v ttl="$TTL" "$JD"'
+            { sub(/\r$/, ""); i = index($0, ":"); f = substr($0, 1, i - 1); v = substr($0, i + 1)
+              sub(/^[a-z_]+:[ \t]*/, "", v)
+              if (isdate(v) && (!(f in oldest) || v < oldest[f])) oldest[f] = v }
+            END { for (f in oldest) if (jd(today) - jd(oldest[f]) > ttl) p++; print p + 0 }')"
+        drafts="$drafts ($past past $TTL-day TTL)"
+      fi
+    fi
+
+    if [[ -n "$harvest" && -n "$drafts" ]]; then
+      echo "$harvest · $drafts"
+    elif [[ -n "$harvest$drafts" ]]; then
+      echo "$harvest$drafts"
+    fi
     exit 0
     ;;
 esac
