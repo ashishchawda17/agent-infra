@@ -261,6 +261,90 @@ run_brief --cat wiki/hot.md >/dev/null
 assert_eq "crlf/bytes-preserved" \
   "$(printf '# hot CRLF\r\nline two\r\n' | od -c)" "$(od -c <"$BOX/out.txt")"
 
+# ================= --backlog: harvest + drafts line (INNOV-295) ===============
+# Harvest counts come from the digests' own status: frontmatter in the working
+# tree's gitignored chats/; drafts come from origin/<default>'s wiki/_drafts/.
+TODAY="$(date +%Y-%m-%d)"
+TTL="$(grep -oE 'TTL [0-9]+ days' "$REPO_ROOT/brain/skills/promote/SKILL.md" | head -n 1 | grep -oE '[0-9]+')"
+
+digest() { # path date status [crlf]
+  mkdir -p "$(dirname "$VAULT/chats/$1")"
+  local nl='\n'
+  [[ "${4:-}" == crlf ]] && nl='\r\n'
+  printf -- "---${nl}session: s${nl}repo: r${nl}date: %s${nl}harvested: true${nl}status: %s   # raw -> reviewed -> ingested${nl}---${nl}${nl}# body${nl}" \
+    "$2" "$3" >"$VAULT/chats/$1"
+}
+
+draft_on_origin() { # name last_verified [crlf]
+  mkdir -p "$SEED/wiki/_drafts"
+  local nl='\n'
+  [[ "${3:-}" == crlf ]] && nl='\r\n'
+  printf -- "---${nl}id: %s${nl}last_verified: %s${nl}draft: true${nl}---${nl}${nl}fact${nl}" \
+    "$1" "$2" >"$SEED/wiki/_drafts/$1.md"
+}
+
+push_drafts() {
+  git -C "$SEED" add -A >/dev/null 2>&1
+  git -C "$SEED" commit -q -m "drafts" >/dev/null 2>&1
+  git -C "$SEED" push -q origin main >/dev/null 2>&1
+  git -C "$VAULT" fetch -q origin >/dev/null 2>&1
+}
+
+assert_eq "backlog/ttl-readable-from-promote" "1" "$([[ -n "$TTL" ]] && echo 1)"
+
+# --- neither source => silent, exit 0
+new_vault
+status="$(run_brief --backlog)"
+assert_eq "backlog/none-exit-0" "0" "$status"
+assert_eq "backlog/none-silent" "" "$(cat "$BOX/out.txt")"
+
+# --- chats/ exists but holds no digests => silent
+mkdir -p "$VAULT/chats/r"
+run_brief --backlog >/dev/null
+assert_eq "backlog/empty-chats-silent" "" "$(cat "$BOX/out.txt")"
+
+# --- both halves; drafts only on origin, so a worktree read would miss them
+new_vault
+digest r/a.md 2020-01-01 raw
+digest r/b.md 2020-01-03 raw crlf
+digest "r w/c.md" 2020-01-02 ingested
+draft_on_origin old-draft 2020-01-01
+draft_on_origin new-draft "$TODAY" crlf
+push_drafts
+before="$(tree_state)"
+status="$(run_brief --backlog)"
+out="$(cat "$BOX/out.txt")"
+assert_eq "backlog/both-exit-0" "0" "$status"
+assert_contains "backlog/raw-ingested-counts" "$out" "Harvest: 2 raw / 1 ingested, newest 2020-01-03"
+assert_contains "backlog/stale-newest-called-out" "$out" "days old)"
+assert_contains "backlog/drafts-from-origin" "$out" "Drafts: 2 (1 past $TTL-day TTL)"
+assert_contains "backlog/one-line-joined" "$out" " · Drafts:"
+assert_eq "backlog/single-line" "1" "$(wc -l <"$BOX/out.txt" | tr -d ' ')"
+assert_eq "backlog/tree-untouched" "$before" "$(tree_state)"
+
+# --- harvest only, current => no stale call-out, no drafts half
+new_vault
+digest r/a.md "$TODAY" raw crlf
+run_brief --backlog >/dev/null
+out="$(cat "$BOX/out.txt")"
+assert_eq "backlog/harvest-only" "Harvest: 1 raw / 0 ingested, newest $TODAY" "$out"
+
+# --- drafts only, none past TTL
+new_vault
+draft_on_origin fresh "$TODAY"
+push_drafts
+run_brief --backlog >/dev/null
+assert_eq "backlog/drafts-only" "Drafts: 1 (0 past $TTL-day TTL)" "$(cat "$BOX/out.txt")"
+
+# --- no remote => drafts fall back to the working tree, like --logs
+new_vault
+mkdir -p "$VAULT/wiki/_drafts"
+printf -- '---\nlast_verified: 2020-01-01\n---\n' >"$VAULT/wiki/_drafts/x.md"
+git -C "$VAULT" remote remove origin >/dev/null 2>&1
+status="$(run_brief --backlog)"
+assert_eq "backlog/noremote-exit-0" "0" "$status"
+assert_eq "backlog/noremote-drafts-from-tree" "Drafts: 1 (1 past $TTL-day TTL)" "$(cat "$BOX/out.txt")"
+
 echo
 echo "$PASSED passed, $FAILED failed"
 [[ "$FAILED" -eq 0 ]]

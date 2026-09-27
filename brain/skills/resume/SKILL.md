@@ -43,6 +43,12 @@ Do these in order; keep the summary tight (the user wants to start working, not 
 
    `wiki/hot.md` is the ~500-word rolling summary of current focus, graph entry vocabulary, and active gotchas. This is the single highest-signal file.
 
+   Then report the harvest/drafts backlog:
+   ```bash
+   bash "$B" --backlog             # e.g. Harvest: 128 raw / 24 ingested, newest 2026-09-16 (11 days old) · Drafts: 33 (7 past 14-day TTL)
+   ```
+   Put its line on the `Backlog:` output line **verbatim**; it prints nothing when the vault has no `chats/` digests and no drafts, and then the line is omitted. Harvest and ingest are both manual, so this is the only place a growing raw pile, a stalled harvest (`days old`), or drafts past the promote TTL show up. Context, not a gate: do not run `/brain:wiki-ingest` or `/brain:promote` from resume.
+
 4. **Read the 3 most recent session logs.** `bash "$B" --logs` prints the newest 3 `logs/YYYY-MM-DD-*.md` paths; read each with `bash "$B" --cat <path>`. Pull out: decisions made, and anything under a "Pending / next steps" heading that is still open.
 
 5. **Pull relevant wiki notes.** Based on what the user says they're about to work on (or, if they said nothing, the focus in `hot.md`), again via `bash "$B" --cat <path>`:
@@ -62,6 +68,7 @@ Drift: <the helper's DRIFT: line, verbatim>   ← omit the line entirely when th
 Focus: <from hot.md>.
 Session: <the script's SESSION: WARN line, verbatim>   ← omit the line entirely on SESSION: OK
 In flight: #<n> <title> (<author>)      ← omit the line entirely if no PRs are open
+Backlog: <the helper's --backlog line, verbatim>   ← omit the line entirely when it prints nothing
 Open loops:
   - <pending item> (from <log>)
   - <pending item>
