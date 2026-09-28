@@ -122,8 +122,8 @@ function check(draftArg, stub) {
   // Real paths, so a symlink under wiki/_drafts/ cannot aim the rewrite at a
   // trusted note or outside the vault.
   if (!existsSync(draftArg)) die(`consolidate: no draft at ${draftArg}`);
-  const abs = realpathSync(draftArg);
-  const rel = relative(realpathSync(VAULT), abs).replace(/\\/g, '/');
+  const abs = realpathSync.native(draftArg);
+  const rel = relative(realpathSync.native(VAULT), abs).replace(/\\/g, '/');
   if (!rel.startsWith('wiki/_drafts/') || rel.includes('../'))
     die(`consolidate: refused — --check only rewrites drafts under wiki/_drafts/ (got ${rel})`);
   const raw = readFileSync(abs, 'utf8');
@@ -176,7 +176,7 @@ function check(draftArg, stub) {
     const qrel = `logs/consolidate-${day}.md`;
     const qpath = join(VAULT, qrel);
     mkdirSync(join(VAULT, 'logs'), { recursive: true });
-    if (realpathSync(join(VAULT, 'logs')) !== join(realpathSync(VAULT), 'logs'))
+    if (realpathSync.native(join(VAULT, 'logs')) !== join(realpathSync.native(VAULT), 'logs'))
       die('consolidate: refused — logs/ resolves outside the vault; contradictions not queued');
     const prior = existsSync(qpath)
       ? readFileSync(qpath, 'utf8').replace(/\r\n/g, '\n')
