@@ -120,18 +120,20 @@ BOX=""
 ORIGIN=""
 SEED=""
 VAULT=""
-sb_new() {
+DEF="main"  # origin's default branch for the current sandbox (sb_new sets it)
+sb_new() { # [default-branch, default main]
+  DEF="${1:-main}"
   BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
   ORIGIN="$BOX/origin.git"
   SEED="$BOX/seed"
   VAULT="$BOX/vault"
 
-  git init --quiet --bare -b main "$ORIGIN"
+  git init --quiet --bare -b "$DEF" "$ORIGIN"
 
   # core.autocrlf must be off for the checkout itself, not just afterwards:
   # a machine with the global autocrlf=true would otherwise write CRLF working
   # files against an LF index and every sandbox would start out "dirty".
-  git "${GITOPTS[@]}" init --quiet -b main "$SEED"
+  git "${GITOPTS[@]}" init --quiet -b "$DEF" "$SEED"
   gitcfg "$SEED"
   mkdir -p "$SEED/wiki"
   printf 'hot cache\n' >"$SEED/wiki/hot.md"
@@ -139,7 +141,7 @@ sb_new() {
   git -C "$SEED" add -A
   git -C "$SEED" commit --quiet -m "seed"
   git -C "$SEED" remote add origin "$ORIGIN"
-  git -C "$SEED" push --quiet -u origin main
+  git -C "$SEED" push --quiet -u origin "$DEF"
 
   # The vault under test: a clone, so `origin` is wired up and wiki/ exists
   # (satisfies the vault sanity check that sync-graph.sh also uses).
@@ -147,14 +149,14 @@ sb_new() {
   gitcfg "$VAULT"
 }
 
-# Adds one commit to origin/main via the seed clone (simulates a teammate).
+# Adds one commit to origin/<default> via the seed clone (simulates a teammate).
 seed_push() { # msg relpath content
   local msg="$1" rel="$2" content="$3"
   mkdir -p "$(dirname "$SEED/$rel")"
   printf '%s' "$content" >"$SEED/$rel"
   git -C "$SEED" add -A
   git -C "$SEED" commit --quiet -m "$msg"
-  git -C "$SEED" push --quiet origin main
+  git -C "$SEED" push --quiet origin "$DEF"
 }
 
 # Adds one commit on the vault's own branch (simulates the local user).
@@ -166,7 +168,7 @@ vault_commit() { # msg relpath content
   git -C "$VAULT" commit --quiet -m "$msg"
 }
 
-origin_sha() { git --git-dir="$ORIGIN" rev-parse refs/heads/main 2>/dev/null; }
+origin_sha() { git --git-dir="$ORIGIN" rev-parse "refs/heads/$DEF" 2>/dev/null; }
 vault_sha() { git -C "$VAULT" rev-parse HEAD 2>/dev/null; }
 
 STATUS=""
@@ -500,6 +502,33 @@ run_commit -m "must refuse: HEAD moved by another session" --pin "$pin_start"
 assert_eq "repin-foreign/vault-commit-refuses" "1" "$CSTATUS" \
   "pin: [$pin_start]" \
   "commit stdout: [$(tr '\n' '|' <"$BOX/cout.txt" 2>/dev/null)]"
+
+# --- 13. INNOV-332: a non-main/master default (trunk) is still guarded ------
+# check-freshness.sh once hard-coded origin/main|master, so a trunk-default vault
+# reported "skipped" and hot.md was rewritten from a stale base. The default must
+# come from lib/branch.sh like every other script. Negative control: restore the
+# literal main/master loop and this case reports skipped with HEAD unmoved.
+echo "--- 13. trunk default: fast-forwarded, not skipped ---"
+sb_new trunk
+seed_push "teammate" "wiki/hot.md" "hot cache v1"
+want="$(origin_sha)"
+run_fresh "$VAULT"
+assert_eq "trunk/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
+assert_prefix "trunk/fast-forwarded" "FRESHNESS: OK - fast-forwarded 1 commit(s) from origin/trunk"   "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
+assert_eq "trunk/head-equals-origin-trunk-sha" "$want" "$(vault_sha)" "$(evidence "$BOX")"
+
+# --- 14. no origin/HEAD: the main/master safety net still finds the upstream --
+# detect_default_branch() comes up empty without origin/HEAD (and gh cannot read
+# a local-path remote), so the literal main/master net must still apply.
+echo "--- 14. no origin/HEAD: main/master safety net ---"
+sb_new
+git -C "$VAULT" remote set-head origin -d >/dev/null 2>&1
+seed_push "teammate" "wiki/hot.md" "hot cache v1"
+want="$(origin_sha)"
+run_fresh "$VAULT"
+assert_eq "no-origin-head/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
+assert_prefix "no-origin-head/fast-forwarded" "FRESHNESS: OK - fast-forwarded 1 commit(s) from origin/main"   "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
+assert_eq "no-origin-head/head-equals-origin-main-sha" "$want" "$(vault_sha)" "$(evidence "$BOX")"
 
 # ================================================================= SUMMARY ==
 echo
