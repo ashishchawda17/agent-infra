@@ -914,6 +914,46 @@ run_session --repin "$(head_sha)"
 assert_eq "repin/missing-arg-exit-1" "1" "$STATUS" "$(evidence)"
 assert_prefix "repin/missing-arg-REFUSED" "SESSION: REFUSED" "$(first_line "$BOX/err.txt")" "$(evidence)"
 
+echo "--- M. --end removes this session's write-hot pin, and only it (INNOV-321) ---"
+
+# --- 45. a real pin -> write cycle, then --end: the per-session pin is gone ---
+# write-hot.sh keeps its pin after --write on purpose (a budget trim writes again
+# without re-pinning), so --end is where it is spent. Without this, every harness
+# session leaves one .brain/hot-<id>.pin behind forever.
+WRITE_HOT="$REPO_ROOT/brain/bin/write-hot.sh"
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+SID="sess-A"
+run_session --start save
+echo "new hot" >"$BOX/new-hot.md"
+BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$WRITE_HOT" --pin >/dev/null 2>&1
+BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$WRITE_HOT" --write "$BOX/new-hot.md" >/dev/null 2>&1
+assert_eq "hotpin/precondition-pin-survives-write" "1" \
+  "$([[ -f "$VAULT/.brain/hot-$SID.pin" ]] && echo 1 || echo 0)" "$(evidence)"
+printf 'x\tt\n' >"$VAULT/.brain/hot-$FOREIGN_SID.pin"   # another live session's pin
+printf 'x\tt\n' >"$VAULT/.brain/hot.pin"                # the id-less shared pin
+run_session --end
+assert_eq "hotpin/end-exit-0" "0" "$STATUS" "$(evidence)"
+assert_eq "hotpin/own-pin-removed" "0" \
+  "$([[ -e "$VAULT/.brain/hot-$SID.pin" ]] && echo 1 || echo 0)" "$(evidence)"
+assert_eq "hotpin/foreign-pin-survives" "1" \
+  "$([[ -f "$VAULT/.brain/hot-$FOREIGN_SID.pin" ]] && echo 1 || echo 0)" "$(evidence)"
+assert_eq "hotpin/shared-pin-survives" "1" \
+  "$([[ -f "$VAULT/.brain/hot.pin" ]] && echo 1 || echo 0)" "$(evidence)"
+
+# --- 46. the pin id is write-hot.sh's, not SELF_ID: GROK_SESSION_ID counts ---
+# session.sh's own identity ignores GROK_SESSION_ID and falls back to session.id,
+# so deriving the pin path from SELF_ID would miss a Grok session's pin.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+mkdir -p "$VAULT/.brain"
+printf 'x\tt\n' >"$VAULT/.brain/hot-grok-1.pin"
+BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="" CLAUDE_CODE_SESSION_ID="" GROK_SESSION_ID="grok-1" \
+  bash "$SESSION" --end >"$BOX/out.txt" 2>"$BOX/err.txt"; STATUS=$?
+assert_eq "hotpin/grok-end-exit-0" "0" "$STATUS" "$(evidence)"
+assert_eq "hotpin/grok-pin-removed" "0" \
+  "$([[ -e "$VAULT/.brain/hot-grok-1.pin" ]] && echo 1 || echo 0)" "$(evidence)"
+
 # ------------------------------------------------------------------ done ---
 echo
 echo "$PASSED passed, $FAILED failed"
