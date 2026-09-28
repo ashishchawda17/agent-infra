@@ -428,6 +428,22 @@ run_check
 assert_eq "tracked-vault-local/exit-0" "0" "$STATUS" "$(evidence)"
 assert_out_has "tracked-vault-local/counts" "1 verified, 0 broken, 0 unverifiable" "$(evidence)"
 
+# ============================================ promote never writes status: ==
+# INNOV-334: promote runs wrote `status: trusted` into 14 notes. `status:` is
+# reserved for current|superseded|falsified (INNOV-294) and freshness flags
+# anything else. Trust is the note's location, so the skill must say so.
+SKILL="$REPO_ROOT/brain/skills/promote/SKILL.md"
+for want in \
+  'Never write `status:`' \
+  '`status:` — optional; if present, exactly `current`, `superseded` or `falsified`' \
+  'Stripping `draft: true` **is** the promotion'; do
+  if grep -qF -- "$want" "$SKILL"; then
+    pass "promote-skill/has:$want"
+  else
+    fail "promote-skill/has:$want" "brain/skills/promote/SKILL.md must keep this sentence"
+  fi
+done
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"

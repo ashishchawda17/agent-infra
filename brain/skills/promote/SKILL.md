@@ -18,6 +18,7 @@ Resolve the vault root as `$BRAIN_ROOT` (else the current project dir / cwd).
 - Never move a draft to trusted `wiki/` without an explicit keep decision from the user.
 - Never commit trusted-note changes directly — always branch + PR (trusted areas are intentionally off `.saveinclude`; the push guardrail stands).
 - Never invent facts to fill frontmatter gaps: propose, flag, and let the user confirm.
+- Never write `status:`. It is reserved for `current | superseded | falsified` (INNOV-294), and promotion is none of those. Trust is the note's location (`wiki/` vs `wiki/_drafts/`), not a field — there is no `status: trusted`.
 - Deleting a dropped draft is allowed (drafts are staging, direct-commit territory) — but only after the user chose **drop**.
 
 ## What to do when invoked
@@ -70,6 +71,7 @@ Ensure each keeper has:
 - a `source:` anchor — the `repo/file#anchor`, PR, or commit that makes the fact true. **Whether it resolves is decided by the script below, never by your reading of the path.**
 - `last_verified:` = today — but only after you actually re-checked the claim against the source (a promote is a verification event, not a rubber stamp).
 - an honest `confidence` — promotion usually raises `low` → `medium`; only the user can call `high`.
+- `status:` — optional; if present, exactly `current`, `superseded` or `falsified` (absent means `current`). Validate it; never add or change it here. `/brain:freshness` flags any other value.
 
 **Then run the anchor gate — don't reason about it, run it.** The trusted tier's only claim to trust is the anchor, so it is checked mechanically, with the *same* resolver `/brain:freshness` uses (`repos.json` identity keyed on the git remote, sub-path repos, pinned revisions via git — not path-guessing under `REPOS_DIR`):
 
@@ -90,7 +92,9 @@ No arguments checks every note in `wiki/_drafts/`. Pass the keepers explicitly w
 ### 4. File
 
 - **Target:** `wiki/<area>/` from the note's id-prefix/tags (e.g. `sm-*` → the sports-management area), or `wiki/bridges/` for a cross-repo contract. Ambiguous → ask.
-- Move the file out of `_drafts/`, strip `draft: true`.
+- Move the file out of `_drafts/`, strip `draft: true`. Stripping `draft: true` **is** the promotion: the move is what makes the note trusted, so write nothing to mark it — no `status:`, no `trusted` tag or field.
+
+  > Why this exists: promote runs on 2026-08-19 and 2026-08-24 invented `status: trusted` in 14 notes. That value is not in the `status:` enum, so every one became a freshness finding.
 - Add a line to `wiki/index.md` (drafts are excluded from the index; promoted notes must join it).
 - Ensure a `Code:` `[[_COMMUNITY_*]]` link line; warn if absent rather than fabricating one.
 - **Merge decisions:** fold the draft's fact into the existing trusted note (body edit, refresh `last_verified`), then delete the draft. The trusted-note edit rides the same PR.
