@@ -33,6 +33,11 @@ VAULT="${BRAIN_ROOT:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 # For finding sibling scripts (session.sh) regardless of cwd.
 BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
+# detect_default_branch() is the one default-branch rule, shared with
+# vault-commit.sh, session.sh, reap-branches.sh and resume-brief.sh. It reads $VAULT.
+# shellcheck source=lib/branch.sh
+. "$BIN_DIR/lib/branch.sh"
+
 MERGE=1
 if [[ "${1:-}" == "--no-merge" ]]; then
   MERGE=0
@@ -60,14 +65,24 @@ fi
 BRANCH="$(git -C "$VAULT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
 
 # --- 1. upstream default branch --------------------------------------------
+# INNOV-332: a hard-coded origin/main|master loop here once skipped every vault
+# whose default is anything else (e.g. trunk). The ref must exist before it is
+# used: rev-list against a missing ref reads as "0 behind", a false OK.
 UPSTREAM=""
 if git -C "$VAULT" remote get-url origin >/dev/null 2>&1; then
-  for cand in origin/main origin/master; do
-    if git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/$cand" >/dev/null 2>&1; then
-      UPSTREAM="$cand"
-      break
-    fi
-  done
+  DEFAULT="$(detect_default_branch)"
+  # Same safety net branch_is_protected() uses when detection comes up empty.
+  if [[ -z "$DEFAULT" ]]; then
+    for cand in main master; do
+      if git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/origin/$cand" >/dev/null 2>&1; then
+        DEFAULT="$cand"
+        break
+      fi
+    done
+  fi
+  if [[ -n "$DEFAULT" ]] && git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT" >/dev/null 2>&1; then
+    UPSTREAM="origin/$DEFAULT"
+  fi
 fi
 if [[ -z "$UPSTREAM" ]]; then
   echo "FRESHNESS: OK - no origin/<default> ref, freshness check skipped"
