@@ -59,8 +59,11 @@ add one fragment named after your ticket: `printf 'patch\n' > .bumps/brain/INNOV
 never conflict, and `tools/check-version-bump.sh` accepts the fragment. The human
 applies all fragments at release with `node tools/bump-version.mjs brain`.
 
-## Do not touch the real vault
+## Read the vault, never write to it
 
-Workers must not run `/brain:*` commands, `session.sh`, or anything that writes
-to `$BRAIN_ROOT`. The vault is shared live state with its own commit guard;
-a worker writing to it corrupts a sibling's session. Test against fixtures.
+Run `/brain:resume` first, as step 1 says: it is read-only and loads the context
+the ticket assumes. Do not run any other `/brain:*` command, `session.sh --start`
+or `--end`, or anything else that writes to `$BRAIN_ROOT`. The vault is shared
+live state with its own commit guard; a worker writing to it corrupts a sibling's
+session. The launching session runs `/brain:save` once for the whole wave, from
+your summary. Test against fixtures.
