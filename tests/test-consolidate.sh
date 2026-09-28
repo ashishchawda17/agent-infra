@@ -326,6 +326,30 @@ EOF
   assert_eq "[$EOL] draft with no linked principle refused" 1 "$rc" "$out"
   if cmp -s "$B" "$TMPROOT/bad"; then pass "[$EOL] all-unlinked draft untouched"; else fail "[$EOL] all-unlinked draft untouched"; fi
 
+  # A symlink under wiki/_drafts/ must not aim the rewrite at a trusted note.
+  L="$V/wiki/_drafts/link.md"
+  put "$V/wiki/spike-legends/trusted.md" <<'EOF'
+---
+id: trusted
+confidence: low
+draft: true
+---
+
+## Principles
+- Kept. [[legends-rally]]
+- Would be dropped.
+EOF
+  if MSYS=winsymlinks:nativestrict ln -s ../spike-legends/trusted.md "$L" 2>/dev/null && [[ -L "$L" ]]; then
+    cp "$V/wiki/spike-legends/trusted.md" "$TMPROOT/trusted"
+    out="$(check "$L" 'Volleyball Domain')"; rc=$?
+    assert_eq "[$EOL] symlinked draft into a trusted area refused" 1 "$rc" "$out"
+    if cmp -s "$V/wiki/spike-legends/trusted.md" "$TMPROOT/trusted"; then pass "[$EOL] symlink target untouched"; else fail "[$EOL] symlink target untouched"; fi
+    rm -f "$L"
+  else
+    echo "SKIP [$EOL] symlink case: this platform cannot create symlinks"
+  fi
+  rm -f "$V/wiki/spike-legends/trusted.md"
+
   T="$V/wiki/spike-legends/legends-set.md"
   out="$(check "$T" 'Volleyball Domain')"; rc=$?
   assert_eq "[$EOL] --check outside wiki/_drafts/ refused" 1 "$rc" "$out"

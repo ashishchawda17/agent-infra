@@ -24,7 +24,7 @@
 // Usage:  BRAIN_ROOT=<vault> node consolidate.mjs --brief "<community>"
 //         (vault: $BRAIN_ROOT → $CLAUDE_PROJECT_DIR → cwd)
 
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs';
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, realpathSync } from 'node:fs';
 import { join, relative, resolve, basename } from 'node:path';
 import { parseFrontmatter } from './anchors.mjs';
 import { nameKey } from './community-name.mjs';
@@ -119,8 +119,11 @@ const linkIds = (t) =>
   [...stripCode(t).matchAll(/\[\[([^\]]+)\]\]/g)].map((m) => basename(m[1].split('|')[0].split('#')[0].trim()));
 
 function check(draftArg, stub) {
-  const abs = resolve(draftArg);
-  const rel = relative(VAULT, abs).replace(/\\/g, '/');
+  // Real paths, so a symlink under wiki/_drafts/ cannot aim the rewrite at a
+  // trusted note or outside the vault.
+  if (!existsSync(draftArg)) die(`consolidate: no draft at ${draftArg}`);
+  const abs = realpathSync(draftArg);
+  const rel = relative(realpathSync(VAULT), abs).replace(/\\/g, '/');
   if (!rel.startsWith('wiki/_drafts/') || rel.includes('../'))
     die(`consolidate: refused — --check only rewrites drafts under wiki/_drafts/ (got ${rel})`);
   const raw = readFileSync(abs, 'utf8');
@@ -173,6 +176,8 @@ function check(draftArg, stub) {
     const qrel = `logs/consolidate-${day}.md`;
     const qpath = join(VAULT, qrel);
     mkdirSync(join(VAULT, 'logs'), { recursive: true });
+    if (realpathSync(join(VAULT, 'logs')) !== join(realpathSync(VAULT), 'logs'))
+      die('consolidate: refused — logs/ resolves outside the vault; contradictions not queued');
     const prior = existsSync(qpath)
       ? readFileSync(qpath, 'utf8').replace(/\r\n/g, '\n')
       : `# Consolidate contradiction queue — ${day}\n\nNever auto-resolved: a human decides which note is wrong.\n`;
