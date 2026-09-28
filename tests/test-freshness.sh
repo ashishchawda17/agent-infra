@@ -163,19 +163,21 @@ fm ok-status 'confidence: medium\nstatus: superseded'
 fm ok-comment 'confidence: low      # drafts start low; review bumps it'
 # CRLF variant: the vault is autocrlf, LF-only fixtures give false greens.
 printf -- '---\r\nid: bad-crlf\r\ntags: [x]\r\nconfidence: medium (more contested)\r\n---\r\n# c\r\n' >"$VAULT/wiki/bad-crlf.md"
+# INNOV-334: the value promote runs invented. Trust is location, not status.
+printf -- '---\r\nid: bad-trusted\r\ntags: [x]\r\nconfidence: medium\r\nstatus: trusted\r\n---\r\n# c\r\n' >"$VAULT/wiki/bad-trusted.md"
 printf -- '---\r\nid: ok-crlf\r\ntags: [x]\r\nconfidence: low\r\nstatus: falsified\r\n---\r\n# c\r\n' >"$VAULT/wiki/ok-crlf.md"
 (
   cd "$BOX" || exit 99
   BRAIN_ROOT="$VAULT" node "$FRESH" --stdout
 ) >"$BOX/out.txt" 2>"$BOX/err.txt"
-if grep -qF 'Malformed `confidence:` / `status:` (3)' "$BOX/out.txt"; then
-  pass "enum/exactly-three"
+if grep -qF 'Malformed `confidence:` / `status:` (4)' "$BOX/out.txt"; then
+  pass "enum/exactly-four"
 else
-  fail "enum/exactly-three" \
-    "expected section header: Malformed \`confidence:\` / \`status:\` (3)" \
+  fail "enum/exactly-four" \
+    "expected section header: Malformed \`confidence:\` / \`status:\` (4)" \
     "actual: [$(grep -F -A5 'Malformed' "$BOX/out.txt")]" "stderr: [$(cat "$BOX/err.txt")]"
 fi
-for n in bad-conf bad-status bad-crlf; do
+for n in bad-conf bad-status bad-crlf bad-trusted; do
   if grep -F 'wiki/'"$n"'.md' "$BOX/out.txt" | grep -qE '`(confidence|status): '; then
     pass "enum/flags-$n"
   else
