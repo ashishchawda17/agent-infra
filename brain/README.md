@@ -14,6 +14,7 @@ hand-assembled set of global hooks + skills + a hand-written query rule (POC §1
 | **Wiki health** | `skills/freshness` + `bin/freshness.mjs` | orphans / dead links / stale `last_verified` / broken `source:` → a review queue (never auto-edits). POC §8. |
 | **Wiki tidy** | `skills/tidy` | applies the mechanical tier of a freshness report (source re-anchors, orphan hub-indexing, tag folds) as one approved batch via PR; never deletes or edits facts. |
 | **Draft → trusted** | `skills/promote` | guided keep/merge/drop triage of `wiki/_drafts/`, frontmatter validation, filing + indexing, one PR per batch; 14-day promote-or-drop TTL. |
+| **Community → synthesis draft** | `skills/consolidate` + `bin/consolidate.mjs` | `/brain:consolidate <community>` turns one named wiki-graph community into a *draft* claim with sources — an amendment when the cluster already holds a `bridges/`/`meta/` note, unlinked principles dropped, contradictions queued in `logs/`. Writes only `wiki/_drafts/` + `logs/`. |
 | **Harvest → draft** | `skills/wiki-ingest` + `bin/harvest-chats.mjs` | distill session transcripts into *draft* notes; promotion is a separate PR step. |
 | **Graph sync** | `bin/sync-graph.sh` + `bin/build-community-notes.mjs` | publish per-repo graph mirrors into the vault, namespaced, with community stubs. A label guard keeps a generic/missing incoming report from clobbering a labeled one. |
 | **Community labeling** | `skills/label` + `bin/label-communities.mjs` | `/brain:label` names a mirror's communities **vault-side** from `graph.json` alone — keyless (host-session), no repo checkout, never changes an existing non-generic name. Clears both freshness labeling findings. |
@@ -67,7 +68,7 @@ Updates key off the version in `brain/.claude-plugin/plugin.json` — releases m
 | **C · The vault repo itself, on a new machine** | clone the vault → `cd` into it → `/brain:init` | Registers the vault + binds it to itself. Detects the existing `CLAUDE.md`/`wiki/` and **won't overwrite** them. |
 | **D · No vault exists yet (first time ever)** | `/brain:init` → choose **"register a new vault"** → give it a path | Scaffolds the skeleton + query-rule `CLAUDE.md` + governance files. Then onboard code repos via scenario A. |
 | **E · Daily work in a linked repo** | `/brain:resume` *(start)* → *(work — just ask structural questions)* → `/brain:save` *(end)* | Graph-before-grep fires automatically; you don't run a command to "use" the graph. |
-| **F · Tending the vault** | `/brain:freshness` · `/brain:tidy` · `/brain:label` · `/brain:wiki-ingest` · `/brain:promote` | Run from the vault. `freshness` = rot review queue (orphans/dead links/stale); `tidy` = apply its mechanical subset as one reviewed batch; `label` = name unlabeled graph communities vault-side (no checkout, preserves existing names); `wiki-ingest` = distill harvested chats → draft notes; `promote` = graduate drafts to trusted via one PR (14-day promote-or-drop TTL). |
+| **F · Tending the vault** | `/brain:freshness` · `/brain:tidy` · `/brain:label` · `/brain:consolidate` · `/brain:wiki-ingest` · `/brain:promote` | Run from the vault. `freshness` = rot review queue (orphans/dead links/stale); `tidy` = apply its mechanical subset as one reviewed batch; `label` = name unlabeled graph communities vault-side (no checkout, preserves existing names); `consolidate` = one named community → a synthesis draft (amend an existing bridge/meta note rather than duplicate it); `wiki-ingest` = distill harvested chats → draft notes; `promote` = graduate drafts to trusted via one PR (14-day promote-or-drop TTL). |
 | **G · Graph / graphify acting broken** | `/brain:doctor` | Diagnoses + repairs the graphify launcher/version, the vault binding, the registry, and stale interpreter caches. |
 
 > **Per-machine, not per-clone:** the vault binding and registry (`~/.claude/brain/registry.json`) are machine-specific. The findings tracker is the exception — it is committed in the vault's `brain.json`, so every clone files plugin bugs to the same board. Cloning a linked repo onto a new laptop always needs one `/brain:init` re-run (scenario B) — it's quick, non-destructive, and writes only to the gitignored local override.
@@ -252,7 +253,7 @@ See `../AI-OS/personal-brain/INSTALL_BASELINE.md` for the acceptance checklist.
 ## Skills are the slash commands
 
 Each `skills/<name>/SKILL.md` registers as both the user-typed slash command (`/brain:save`
-`/brain:resume` `/brain:freshness` `/brain:tidy` `/brain:promote` `/brain:wiki-ingest` `/brain:init` `/brain:doctor`) and the
+`/brain:resume` `/brain:freshness` `/brain:tidy` `/brain:promote` `/brain:consolidate` `/brain:wiki-ingest` `/brain:init` `/brain:doctor`) and the
 model-invocable skill (natural-language triggers, e.g. "lint the wiki" → freshness). There is
 deliberately **no separate `commands/` dir** — earlier versions shipped thin command wrappers,
 which registered every entry point twice per session (e.g. `brain:init` *and* `brain:brain-init`).
