@@ -45,7 +45,8 @@
 #
 # THE PIN lives at <vault>/.brain/hot.pin, or .brain/hot-<id>.pin when
 # BRAIN_SESSION_ID / CLAUDE_CODE_SESSION_ID / GROK_SESSION_ID names the session
-# (so one session's write cannot advance another's pin) — machine-local state about an
+# (so one session's write cannot advance another's pin; session.sh --end removes
+# that per-session file, never the shared hot.pin) — machine-local state about an
 # in-flight command, never committed (the vault .gitignore template ignores
 # .brain/). It holds the hash and when it was taken. A hot.md that does not exist
 # yet pins as the literal `absent`, so the first-ever write is guarded too: if

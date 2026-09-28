@@ -30,7 +30,7 @@
 # Usage:
 #   BRAIN_ROOT=<vault> bash session.sh --start <command-name>  # register + branch policy
 #   BRAIN_ROOT=<vault> bash session.sh --status                # report, mutate nothing
-#   BRAIN_ROOT=<vault> bash session.sh --end                   # deregister THIS session
+#   BRAIN_ROOT=<vault> bash session.sh --end                   # deregister THIS session, drop its hot-<id>.pin
 #   BRAIN_ROOT=<vault> bash session.sh --print-pin             # banner; its "  pin:" line is BRANCH:SHA for vault-commit.sh
 #   BRAIN_ROOT=<vault> bash session.sh --repin <old> <new>     # check-freshness.sh ONLY, see below
 #
@@ -508,6 +508,15 @@ if [[ "$MODE" == "end" ]]; then
   # write_state with no new record drops ours and prunes the dead, keeping every
   # other live session exactly as it was — ending my session must never end yours.
   write_state
+  # write-hot.sh's per-session pin is spent once the session ends (INNOV-321); it
+  # keeps it after --write on purpose, so nothing else removes it. The id is
+  # derived exactly as write-hot.sh derives it, NOT from SELF_ID: SELF_ID ignores
+  # GROK_SESSION_ID and can fall back to session.id, i.e. someone else's session.
+  HOT_PIN_ID="${BRAIN_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-${GROK_SESSION_ID:-}}}"
+  case "$HOT_PIN_ID" in
+    ""|*[!A-Za-z0-9._-]*) ;;
+    *) rm -f "$STATE_DIR/hot-$HOT_PIN_ID.pin" 2>/dev/null || true ;;
+  esac
   if [[ ${#WARNINGS[@]} -gt 0 ]]; then
     # A corrupt file is still only a warning here: --end has just replaced it with
     # a well-formed array, so the vault is repaired, but the caller is told that
