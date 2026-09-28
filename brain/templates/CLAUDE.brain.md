@@ -109,6 +109,7 @@ This is not bookkeeping. While the carve-out was a machine-local, git-excluded f
 - `/brain:tidy` — apply the mechanical tier of the freshness queue (source re-anchors, orphan hub-indexing, tag folds) as one approved batch via PR; never deletes notes or edits facts.
 - `/brain:label` — name a graph mirror's communities vault-side from its `graph.json` (keyless, no repo checkout); preserves existing non-generic names, regenerates the `[[_COMMUNITY_*]]` stubs. Never resync a mirror to fix labels.
 - `/brain:promote` — guided draft→trusted triage (keep/merge/drop, frontmatter validation, filing + index) shipped as one PR; drafts older than 14 days are promote-or-drop, never left in staging.
+- `/brain:consolidate <community>` — turn one named wiki-graph community into a synthesis draft in `wiki/_drafts/` (amends an existing bridge/meta member rather than duplicating it; contradictions queued in `logs/`). A scope is required.
 - `/brain:wiki-ingest` — distill harvested chats into draft notes (run the harvest script first).
 
 **Found a bug in the brain plugin itself?** Don't file it anywhere by hand — queue it:
