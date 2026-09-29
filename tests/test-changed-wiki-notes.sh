@@ -330,8 +330,8 @@ fi
 echo "--- --deleted ---"
 
 # Every deletion shape at once: unstaged ( D), staged (D ), modified-then-deleted
-# (MD), and added-then-deleted (AD, never in HEAD — so never in any graph, NOT a
-# deletion). A modified and a brand-new note must stay out of this stream.
+# (MD), renamed-then-deleted (RD — its HEAD source is the deletion), and
+# added-then-deleted (AD, never in HEAD — so never in any graph, NOT a deletion). A modified and a brand-new note must stay out of this stream.
 deletion_shapes() {
   new_vault
   printf '# gone-unstaged\n' >"$VAULT/wiki/gone-unstaged.md"
@@ -346,6 +346,8 @@ deletion_shapes() {
   printf '# ad\n' >"$VAULT/wiki/never-committed.md"
   git -C "$VAULT" add "wiki/never-committed.md" >/dev/null 2>&1
   rm -f "$VAULT/wiki/never-committed.md"                                 # AD
+  git -C "$VAULT" mv "wiki/two.md" "wiki/gone-rd-new.md" >/dev/null 2>&1
+  rm -f "$VAULT/wiki/gone-rd-new.md"                                     # RD: two.md is the deletion
   printf '# one changed\n' >>"$VAULT/wiki/one.md"                        #  M
   printf '# fresh\n' >"$VAULT/wiki/fresh.md"                             # ??
   rm -f "$VAULT/logs/x.md"                                               # outside wiki/
@@ -353,7 +355,7 @@ deletion_shapes() {
 
 deletion_shapes
 status="$(run_cwn --deleted)"
-expected="$(printf 'wiki/gone-md.md\nwiki/gone-staged.md\nwiki/gone-unstaged.md')"
+expected="$(printf 'wiki/gone-md.md\nwiki/gone-staged.md\nwiki/gone-unstaged.md\nwiki/two.md')"
 assert_eq "deleted/uncommitted-shapes" "$expected" "$(cat "$BOX/out.txt")" \
   "stderr: [$(cat "$BOX/err.txt")]"
 assert_eq "deleted/uncommitted-shapes-exit-0" "0" "$status"
@@ -366,7 +368,7 @@ assert_eq "default/no-deletion-leaks" "$(printf 'wiki/fresh.md\nwiki/one.md')" \
 
 # --porcelain composes with --deleted.
 status="$(run_cwn --deleted --porcelain)"
-assert_eq "deleted/porcelain-count" "3" "$(head -n 1 "$BOX/out.txt")"
+assert_eq "deleted/porcelain-count" "4" "$(head -n 1 "$BOX/out.txt")"
 
 # Committed range: a deletion committed after <ref> is listed with --since; the
 # default --since stream still omits it.

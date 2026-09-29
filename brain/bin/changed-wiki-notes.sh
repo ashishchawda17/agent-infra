@@ -131,7 +131,12 @@ collect() {
     fi
     if [[ $DELETED -eq 1 ]]; then
       # Deleted relative to HEAD: staged (D?), or unstaged from a tracked file
-      # ( D / MD). AD/RD/CD paths were never in HEAD, so never in any graph.
+      # ( D / MD). An RD rename's SOURCE was in HEAD and has no successor on disk,
+      # so the source is the deletion. AD/RD/CD record paths were never in HEAD.
+      if [[ "$x" == "R" && "$y" == "D" ]]; then
+        emit "$_old"
+        continue
+      fi
       [[ "$x" == "D" || ( "$y" == "D" && ( "$x" == " " || "$x" == "M" ) ) ]] || continue
     else
       [[ "$x" == "D" || "$y" == "D" ]] && continue
