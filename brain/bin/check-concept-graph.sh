@@ -6,13 +6,14 @@
 # invisible to that gate: a recorded incident had 2 session-changed notes while
 # the concept graph was 517 documents behind — and the step reported green. Same
 # false-green class as INNOV-279. This script measures the TOTAL: every wiki note
-# added/modified since the graph was last built, whichever session did it.
+# added/modified/deleted since the graph was last built, whichever session did it.
 #
 # "Last built" is approximated as the last commit that touched the vault's own
 # graphify-out/graph.json — an uncommitted rebuild can therefore over-report
 # until step 6 commits it, which WARN polarity makes harmless. The changed-note
 # set is computed by changed-wiki-notes.sh --since <that commit> (uncommitted +
-# committed-since, added/modified only). It is NEVER computed from graphify-out
+# committed-since, added/modified) plus its --deleted stream, counted 1:1: a deleted
+# note leaves a phantom node (INNOV-292). It is NEVER computed from graphify-out
 # manifest.json — INNOV-271 documents that list over-reporting hundreds of notes
 # when ten changed.
 #
@@ -75,7 +76,7 @@ if [[ -z "$LAST" ]]; then
   exit 0
 fi
 
-# --- 1. measure: wiki notes added/modified since the graph's last commit -----
+# --- 1. measure: wiki notes added/modified/deleted since the graph's last commit
 # A broken measurement must land on SKIPPED, never on "OK - 0" — that would be
 # this ticket's false green wearing a different hat (a stale install really has
 # shipped without sibling scripts before; see doctor check 7).
@@ -89,11 +90,14 @@ if [[ "$CWN_STATUS" -ne 0 ]]; then
   echo "CONCEPT-GRAPH: SKIPPED - changed-wiki-notes.sh failed (exit $CWN_STATUS), staleness not measurable"
   exit 0
 fi
-if [[ -z "$STALE_LIST" ]]; then
-  N=0
-else
-  N="$(printf '%s\n' "$STALE_LIST" | grep -c '' | tr -d ' \r')"
+DELETED_LIST="$(BRAIN_ROOT="$VAULT" bash "$SCRIPT_DIR/changed-wiki-notes.sh" --since "$LAST" --deleted 2>/dev/null)"
+CWN_STATUS=$?
+if [[ "$CWN_STATUS" -ne 0 ]]; then
+  echo "CONCEPT-GRAPH: SKIPPED - changed-wiki-notes.sh --deleted failed (exit $CWN_STATUS), staleness not measurable"
+  exit 0
 fi
+# The streams are disjoint by construction, so summing them never double-counts.
+N="$(printf '%s\n%s\n' "$STALE_LIST" "$DELETED_LIST" | grep -c . | tr -d ' \r')"
 
 # --- 2. verdict — the count is printed on BOTH paths ------------------------
 if [[ "$N" -le "$THRESHOLD" ]]; then
@@ -103,7 +107,7 @@ fi
 
 {
   echo "CONCEPT-GRAPH: STALE - $N document(s) behind (threshold $THRESHOLD); wiki graph last committed at ${LAST:0:12}"
-  echo "  $N wiki note(s) were added/modified since the concept graph was last built,"
+  echo "  $N wiki note(s) were added/modified/deleted since the concept graph was last built,"
   echo "  across ALL sessions — the session-changed list alone cannot see this."
   echo "  WARN only: skipping the refresh is still allowed, but say so with this line."
   echo "  Remedy: run /brain:save step 5c's graphify refresh (skill, wiki --update),"

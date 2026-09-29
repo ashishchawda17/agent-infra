@@ -348,6 +348,96 @@ assert_prefix "missing-sibling/SKIPPED-not-OK" "CONCEPT-GRAPH: SKIPPED" \
 assert_contains "missing-sibling/names-the-sibling" "changed-wiki-notes.sh" \
   "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
 
+# --- 14. deletions count 1:1 (INNOV-292) --------------------------------------
+# A deleted note leaves a phantom node in the graph, so it makes the graph stale
+# exactly as much as a modified one. Fixture: 30 notes extracted into a graph
+# committed AFTER them (current), then notes are deleted.
+echo "--- 14. deletions count toward staleness, 1:1 ---"
+graphed_vault() { # n notes, graph rebuilt after them => OK at birth
+  new_vault
+  add_notes "$VAULT" old "$1"
+  git_commit_all "$VAULT" "$1 notes"
+  printf '{"nodes":["rebuilt"]}\n' >"$VAULT/graphify-out/graph.json"
+  git_commit_all "$VAULT" "rebuild graph"
+}
+delete_notes() { # dir prefix from to — one rm, not one per note (Windows spawn tax)
+  local i="$3" paths=""
+  while [[ "$i" -le "$4" ]]; do
+    paths="$paths $1/wiki/$2-$i.md"
+    i=$((i + 1))
+  done
+  # shellcheck disable=SC2086 # fixture paths have no spaces; word-split on purpose
+  rm -f $paths
+}
+
+# deletion-only, above threshold: 20 committed + 6 uncommitted = 26 > 25
+graphed_vault 30
+delete_notes "$VAULT" old 1 20
+git_commit_all "$VAULT" "cleanup: delete 20 notes"
+delete_notes "$VAULT" old 21 26
+run_guard "$GUARD"
+assert_eq "deletion-only/exit-1" "1" "$STATUS" \
+  "26 deleted notes are 26 phantom nodes — the graph is stale" "$(evidence "$BOX")"
+assert_contains "deletion-only/names-26" "26 document(s) behind" \
+  "$(first_line "$BOX/err.txt")" "$(evidence "$BOX")"
+
+# negative control: deletion-only, at threshold stays OK (no heavier weighting)
+graphed_vault 30
+delete_notes "$VAULT" old 1 5
+git_commit_all "$VAULT" "delete 5"
+run_guard "$GUARD" CONCEPT_GRAPH_THRESHOLD=5
+assert_eq "deletion-under-threshold/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
+assert_contains "deletion-under-threshold/OK-5" "OK - 5 document(s)" \
+  "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
+
+# mixed: 3 modified + 3 deleted = 6 > 5 — the streams are summed
+graphed_vault 30
+printf 'edit\n' >>"$VAULT/wiki/old-1.md"
+printf 'edit\n' >>"$VAULT/wiki/old-2.md"
+printf 'edit\n' >>"$VAULT/wiki/old-3.md"
+delete_notes "$VAULT" old 4 6
+run_guard "$GUARD" CONCEPT_GRAPH_THRESHOLD=5
+assert_eq "mixed/exit-1" "1" "$STATUS" "$(evidence "$BOX")"
+assert_contains "mixed/names-6" "6 document(s) behind" "$(first_line "$BOX/err.txt")" \
+  "$(evidence "$BOX")"
+
+# CRLF variant (SPO-346): an autocrlf vault with CRLF notes counts the same.
+BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+VAULT="$BOX/vault"
+mkdir -p "$VAULT/wiki" "$VAULT/graphify-out"
+i=1
+while [[ "$i" -le 6 ]]; do
+  printf '# crlf %d\r\nbody\r\n' "$i" >"$VAULT/wiki/crlf-$i.md"
+  i=$((i + 1))
+done
+printf '{"nodes":[]}\r\n' >"$VAULT/graphify-out/graph.json"
+git_init_commit "$VAULT" "crlf vault + graph"
+git -C "$VAULT" config core.autocrlf true
+delete_notes "$VAULT" crlf 1 6
+run_guard "$GUARD" CONCEPT_GRAPH_THRESHOLD=5
+assert_eq "crlf-deletions/exit-1" "1" "$STATUS" "$(evidence "$BOX")"
+assert_contains "crlf-deletions/names-6" "6 document(s) behind" \
+  "$(first_line "$BOX/err.txt")" "$(evidence "$BOX")"
+
+# NEGATIVE CONTROL: a guard that drops the --deleted stream is the INNOV-292 bug;
+# on the deletion-only fixture it must go green, proving the case above can fail.
+DELMUT="$TMPROOT/deleted-mutant-bin"
+mkdir -p "$DELMUT"
+cp "$CWN" "$DELMUT/changed-wiki-notes.sh"
+sed 's/^DELETED_LIST=.*/DELETED_LIST=""/' "$GUARD" >"$DELMUT/check-concept-graph.sh"
+if cmp -s "$GUARD" "$DELMUT/check-concept-graph.sh"; then
+  fail "deleted-negative-control/mutation-applied" "sed did not change the guard"
+else
+  pass "deleted-negative-control/mutation-applied"
+fi
+graphed_vault 30
+delete_notes "$VAULT" old 1 26
+run_guard "$DELMUT/check-concept-graph.sh"
+assert_eq "deleted-negative-control/mutant-goes-green" "0" "$STATUS" \
+  "without the --deleted stream, 26 phantom nodes read as OK - 0" "$(evidence "$BOX")"
+run_guard "$GUARD"
+assert_eq "deleted-negative-control/real-guard-STALE" "1" "$STATUS" "$(evidence "$BOX")"
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"

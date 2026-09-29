@@ -7,7 +7,8 @@
 #   changed note (git working tree / index), NOT what manifest.json claims.
 #     - without --since : uncommitted changes only
 #     - with --since <ref> : additionally, files changed between <ref> and HEAD
-#     - deletions are never listed (nothing left to re-extract)
+#     - deletions are never listed (nothing left to re-extract) — they have
+#       their own --deleted stream, which lists nothing else (INNOV-292)
 #     - only wiki/**/*.md — nothing outside wiki/, no non-.md files
 #     - paths with spaces are emitted verbatim (git's porcelain quoting must be
 #       undone), renames report only the NEW path
@@ -320,6 +321,134 @@ else
     "before: [$(cat "$BOX/status.before")]" \
     "after:  [$(cat "$BOX/status.after")]" \
     "exit codes: [$status] [$status2]"
+fi
+
+# ---------------------------------------------------------- --deleted (INNOV-292) --
+# A second stream: deleted wiki notes only. The default stream stays the /brain:save
+# 5c work list (nothing to re-extract from a deleted note); --deleted feeds the
+# check-concept-graph.sh staleness count, where a deletion leaves a phantom node.
+echo "--- --deleted ---"
+
+# Every deletion shape at once: unstaged ( D), staged (D ), modified-then-deleted
+# (MD), renamed-then-deleted (RD — its HEAD source is the deletion), and
+# added-then-deleted (AD, never in HEAD — so never in any graph, NOT a deletion). A modified and a brand-new note must stay out of this stream.
+deletion_shapes() {
+  new_vault
+  printf '# gone-unstaged\n' >"$VAULT/wiki/gone-unstaged.md"
+  printf '# gone-staged\n' >"$VAULT/wiki/gone-staged.md"
+  printf '# gone-md\n' >"$VAULT/wiki/gone-md.md"
+  git_commit_all "$VAULT" "notes to delete"
+  rm -f "$VAULT/wiki/gone-unstaged.md"                                   #  D
+  git -C "$VAULT" rm -q "wiki/gone-staged.md" >/dev/null 2>&1            # D
+  printf 'edit\n' >>"$VAULT/wiki/gone-md.md"
+  git -C "$VAULT" add "wiki/gone-md.md" >/dev/null 2>&1
+  rm -f "$VAULT/wiki/gone-md.md"                                         # MD
+  printf '# ad\n' >"$VAULT/wiki/never-committed.md"
+  git -C "$VAULT" add "wiki/never-committed.md" >/dev/null 2>&1
+  rm -f "$VAULT/wiki/never-committed.md"                                 # AD
+  git -C "$VAULT" mv "wiki/two.md" "wiki/gone-rd-new.md" >/dev/null 2>&1
+  rm -f "$VAULT/wiki/gone-rd-new.md"                                     # RD: two.md is the deletion
+  printf '# one changed\n' >>"$VAULT/wiki/one.md"                        #  M
+  printf '# fresh\n' >"$VAULT/wiki/fresh.md"                             # ??
+  rm -f "$VAULT/logs/x.md"                                               # outside wiki/
+}
+
+deletion_shapes
+status="$(run_cwn --deleted)"
+expected="$(printf 'wiki/gone-md.md\nwiki/gone-staged.md\nwiki/gone-unstaged.md\nwiki/two.md')"
+assert_eq "deleted/uncommitted-shapes" "$expected" "$(cat "$BOX/out.txt")" \
+  "stderr: [$(cat "$BOX/err.txt")]"
+assert_eq "deleted/uncommitted-shapes-exit-0" "0" "$status"
+
+# Default output on the SAME fixture is unchanged: no deletion ever leaks into the
+# work list. This is the assertion that fails if the two streams get merged.
+status="$(run_cwn)"
+assert_eq "default/no-deletion-leaks" "$(printf 'wiki/fresh.md\nwiki/one.md')" \
+  "$(cat "$BOX/out.txt")"
+
+# --porcelain composes with --deleted.
+status="$(run_cwn --deleted --porcelain)"
+assert_eq "deleted/porcelain-count" "4" "$(head -n 1 "$BOX/out.txt")"
+
+# Committed range: a deletion committed after <ref> is listed with --since; the
+# default --since stream still omits it.
+new_vault
+ref="$(git -C "$VAULT" rev-parse HEAD)"
+git -C "$VAULT" rm -q "wiki/two.md" >/dev/null 2>&1
+printf '# one changed\n' >>"$VAULT/wiki/one.md"
+git_commit_all "$VAULT" "delete two, edit one"
+status="$(run_cwn --deleted --since "$ref")"
+assert_eq "deleted/since-committed-deletion" "wiki/two.md" "$(cat "$BOX/out.txt")" \
+  "stderr: [$(cat "$BOX/err.txt")]"
+status="$(run_cwn --since "$ref")"
+assert_eq "default/since-no-deletion-leaks" "wiki/one.md" "$(cat "$BOX/out.txt")"
+
+# A note deleted in the range but re-created in the working tree exists again —
+# it belongs to the default stream, not this one.
+printf '# two is back\n' >"$VAULT/wiki/two.md"
+status="$(run_cwn --deleted --since "$ref")"
+assert_eq "deleted/recreated-not-listed" "" "$(cat "$BOX/out.txt")"
+
+# Renames are emitted as their new path by the default stream and must not also
+# register as a deletion — staged (git mv) and committed, the latter even with
+# rename detection switched off in the user's config.
+new_vault
+git -C "$VAULT" config diff.renames false   # status.renames follows it by default
+git -C "$VAULT" mv "wiki/one.md" "wiki/renamed.md" >/dev/null 2>&1
+status="$(run_cwn --deleted)"
+assert_eq "deleted/staged-rename-not-a-deletion" "" "$(cat "$BOX/out.txt")"
+new_vault
+git -C "$VAULT" config diff.renames false
+ref="$(git -C "$VAULT" rev-parse HEAD)"
+git -C "$VAULT" mv "wiki/one.md" "wiki/renamed.md" >/dev/null 2>&1
+git_commit_all "$VAULT" "rename one"
+status="$(run_cwn --deleted --since "$ref")"
+assert_eq "deleted/committed-rename-not-a-deletion" "" "$(cat "$BOX/out.txt")"
+
+# Not a git repo => the same clean no-op as the default path.
+BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+VAULT="$BOX/vault"
+mkdir -p "$VAULT/wiki"
+status="$(run_cwn --deleted)"
+assert_eq "deleted/not-a-git-repo-exit-0" "0" "$status"
+assert_eq "deleted/not-a-git-repo-no-stdout" "" "$(cat "$BOX/out.txt")"
+
+# CRLF variant (SPO-346): the vault is autocrlf, so fixtures with CRLF content in an
+# autocrlf=true repo must behave the same — an LF-only fixture can false-green.
+BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+VAULT="$BOX/vault"
+mkdir -p "$VAULT/wiki"
+printf '# crlf one\r\nbody\r\n' >"$VAULT/wiki/one.md"
+printf '# crlf two\r\nbody\r\n' >"$VAULT/wiki/two.md"
+git_init_commit "$VAULT" "crlf vault"
+git -C "$VAULT" config core.autocrlf true
+ref="$(git -C "$VAULT" rev-parse HEAD)"
+git -C "$VAULT" rm -q "wiki/one.md" >/dev/null 2>&1
+git_commit_all "$VAULT" "delete crlf one"
+rm -f "$VAULT/wiki/two.md"
+status="$(run_cwn --deleted --since "$ref")"
+assert_eq "deleted/crlf-vault" "$(printf 'wiki/one.md\nwiki/two.md')" "$(cat "$BOX/out.txt")" \
+  "stderr: [$(cat "$BOX/err.txt")]"
+status="$(run_cwn --since "$ref")"
+assert_eq "default/crlf-vault-no-deletion-leaks" "" "$(cat "$BOX/out.txt")"
+
+# NEGATIVE CONTROL: a mutant with the deletion stream switched on unconditionally
+# (the streams crossed) must fail the leak assertion above — proof it can fail.
+MUT="$TMPROOT/cwn-mutant.sh"
+sed 's/^DELETED=0$/DELETED=1/' "$CWN" >"$MUT"
+if cmp -s "$CWN" "$MUT"; then
+  fail "negative-control/mutation-applied" "sed did not change the script — the mutant is vacuous"
+else
+  pass "negative-control/mutation-applied"
+  deletion_shapes
+  ( cd "$BOX" && BRAIN_ROOT="$VAULT" bash "$MUT" ) >"$BOX/out.txt" 2>"$BOX/err.txt"
+  if grep -qF 'wiki/gone-' "$BOX/out.txt"; then
+    pass "negative-control/leak-detected"
+  else
+    fail "negative-control/leak-detected" \
+      "the crossed-streams mutant should leak deletions into the default stream" \
+      "stdout: [$(cat "$BOX/out.txt")]"
+  fi
 fi
 
 # ================================================================= SUMMARY ==

@@ -64,7 +64,7 @@ Resolve the vault as `$BRAIN_ROOT` (else cwd). **Pinned graphify version: `0.8.4
     ```
     - **Exit `0` (`CONCEPT-GRAPH: OK`) →** ✅, quote the line — it carries the count.
     - **Exit `0` (`CONCEPT-GRAPH: SKIPPED`) →** ⚠️ "skipped — <reason>", never ✅ (check 7's rule: a false ✅ is what this exists to prevent). A vault with no wiki graph yet legitimately skips.
-    - **Exit `1` (`CONCEPT-GRAPH: STALE`) →** ⚠️ **informational, no scripted repair** (like check 4c) — the remedy is `/brain:save` step 5c's graphify refresh (`wiki --update` through the *skill*), which the script's own remedy text names. Relay the line **verbatim**; it counts wiki notes changed (per git) since the last commit touching `graphify-out/graph.json` — never `manifest.json` (INNOV-271).
+    - **Exit `1` (`CONCEPT-GRAPH: STALE`) →** ⚠️ **informational, no scripted repair** (like check 4c) — the remedy is `/brain:save` step 5c's graphify refresh (`wiki --update` through the *skill*), which the script's own remedy text names. Relay the line **verbatim**; it counts wiki notes added/modified/deleted (per git) since the last commit touching `graphify-out/graph.json` — never `manifest.json` (INNOV-271).
     - Skip if check 4 failed — bind a vault first. A non-vault dir reports SKIPPED, not a crash.
 11. **Findings tracker committed in the vault** — read `<vault>/brain.json` and confirm `git -C <vault> ls-files --error-unmatch brain.json` succeeds. The tracker lives there (not the per-machine registry) so every teammate's agent files plugin bugs to the same board; a vault without it leaves each machine's findings queued with nowhere to go.
     - `tracker` present (`jira` + `project`, `linear` + `team`, or `none`) **and** tracked by git → ✅ quote the destination.
