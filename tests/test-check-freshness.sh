@@ -530,26 +530,26 @@ assert_eq "no-origin-head/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
 assert_prefix "no-origin-head/fast-forwarded" "FRESHNESS: OK - fast-forwarded 1 commit(s) from origin/main"   "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
 assert_eq "no-origin-head/head-equals-origin-main-sha" "$want" "$(vault_sha)" "$(evidence "$BOX")"
 
-# --- 15. INNOV-342: origin renamed its default => skipped, never "up to date" --
+# --- 15. INNOV-342: origin renamed its default => the NEW default is checked ---
 # The stale local origin/HEAD still names main and origin/main still exists, so a
 # resolve-before-fetch picked it, `fetch --prune` then deleted it, and rev-list's
-# `|| echo 0` read the vanished ref as 0 behind. Negative control: resolve
-# UPSTREAM before the fetch again and this reports "up to date with origin/main".
-echo "--- 15. origin default renamed: skipped, not up to date ---"
+# `|| echo 0` read the vanished ref as 0 behind. A plain "skipped" is no better:
+# it exits 0 too, and hot.md is rewritten from the stale base either way.
+# Negative controls: resolve before the fetch => "up to date with origin/main";
+# drop the `remote set-head --auto` re-read => "skipped", HEAD unmoved.
+echo "--- 15. origin default renamed: fast-forwarded from the new default ---"
 sb_new
 git --git-dir="$ORIGIN" branch -m main trunk
 git --git-dir="$ORIGIN" symbolic-ref HEAD refs/heads/trunk
-before="$(vault_sha)"
+DEF="trunk"
+printf 'hot cache v1' >"$SEED/wiki/hot.md"
+git -C "$SEED" commit --quiet -am "teammate, on the renamed default"
+git -C "$SEED" push --quiet origin HEAD:trunk
+want="$(origin_sha)"
 run_fresh "$VAULT"
 assert_eq "renamed/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
-assert_prefix "renamed/stdout-first-line-OK" "FRESHNESS: OK" "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
-assert_ne "renamed/not-up-to-date" "FRESHNESS: OK - up to date with origin/main" "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
-if grep -q "skipped" "$BOX/out.txt" 2>/dev/null; then
-  pass "renamed/says-check-skipped"
-else
-  fail "renamed/says-check-skipped" "expected stdout to say the check was skipped" "$(evidence "$BOX")"
-fi
-assert_eq "renamed/head-unchanged" "$before" "$(vault_sha)" "$(evidence "$BOX")"
+assert_prefix "renamed/fast-forwarded-from-trunk" "FRESHNESS: OK - fast-forwarded 1 commit(s) from origin/trunk" "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
+assert_eq "renamed/head-equals-origin-trunk-sha" "$want" "$(vault_sha)" "$(evidence "$BOX")"
 
 # --- 16. INNOV-342: origin/<default> never fetched => the fetch finds it ------
 # Resolving before the fetch reported "skipped" for a ref the fetch would have

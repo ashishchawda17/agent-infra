@@ -80,9 +80,16 @@ fi
 # used: rev-list against a missing ref reads as "0 behind", a false OK.
 # INNOV-342: so it is resolved AFTER the fetch. Resolved before, a ref that
 # `--prune` deleted (origin renamed its default) read as "up to date", and a ref
-# the fetch would have created read as "skipped".
+# the fetch would have created read as "skipped". And a fetch never refreshes
+# origin/HEAD, so when it names a branch that no longer exists, re-read it from
+# origin once — skipping there would still let hot.md be rewritten from a stale base.
 UPSTREAM=""
 DEFAULT="$(detect_default_branch)"
+if [[ -n "$DEFAULT" ]] && ! git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT" >/dev/null 2>&1; then
+  if git -C "$VAULT" remote set-head origin --auto >/dev/null 2>&1; then
+    DEFAULT="$(detect_default_branch)"
+  fi
+fi
 # Same safety net branch_is_protected() uses when detection comes up empty.
 if [[ -z "$DEFAULT" ]]; then
   for cand in main master; do
