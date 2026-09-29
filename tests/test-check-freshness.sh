@@ -530,6 +530,40 @@ assert_eq "no-origin-head/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
 assert_prefix "no-origin-head/fast-forwarded" "FRESHNESS: OK - fast-forwarded 1 commit(s) from origin/main"   "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
 assert_eq "no-origin-head/head-equals-origin-main-sha" "$want" "$(vault_sha)" "$(evidence "$BOX")"
 
+# --- 15. INNOV-342: origin renamed its default => skipped, never "up to date" --
+# The stale local origin/HEAD still names main and origin/main still exists, so a
+# resolve-before-fetch picked it, `fetch --prune` then deleted it, and rev-list's
+# `|| echo 0` read the vanished ref as 0 behind. Negative control: resolve
+# UPSTREAM before the fetch again and this reports "up to date with origin/main".
+echo "--- 15. origin default renamed: skipped, not up to date ---"
+sb_new
+git --git-dir="$ORIGIN" branch -m main trunk
+git --git-dir="$ORIGIN" symbolic-ref HEAD refs/heads/trunk
+before="$(vault_sha)"
+run_fresh "$VAULT"
+assert_eq "renamed/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
+assert_prefix "renamed/stdout-first-line-OK" "FRESHNESS: OK" "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
+assert_ne "renamed/not-up-to-date" "FRESHNESS: OK - up to date with origin/main" "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
+if grep -q "skipped" "$BOX/out.txt" 2>/dev/null; then
+  pass "renamed/says-check-skipped"
+else
+  fail "renamed/says-check-skipped" "expected stdout to say the check was skipped" "$(evidence "$BOX")"
+fi
+assert_eq "renamed/head-unchanged" "$before" "$(vault_sha)" "$(evidence "$BOX")"
+
+# --- 16. INNOV-342: origin/<default> never fetched => the fetch finds it ------
+# Resolving before the fetch reported "skipped" for a ref the fetch would have
+# created. Negative control: fetch after the resolve and this reports skipped.
+echo "--- 16. origin/main not fetched yet: fetched, then fast-forwarded ---"
+sb_new
+git -C "$VAULT" update-ref -d refs/remotes/origin/main
+seed_push "teammate" "wiki/hot.md" "hot cache v1"
+want="$(origin_sha)"
+run_fresh "$VAULT"
+assert_eq "unfetched/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
+assert_prefix "unfetched/fast-forwarded" "FRESHNESS: OK - fast-forwarded 1 commit(s) from origin/main" "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
+assert_eq "unfetched/head-equals-origin-main-sha" "$want" "$(vault_sha)" "$(evidence "$BOX")"
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"
