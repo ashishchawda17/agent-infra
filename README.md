@@ -107,7 +107,7 @@ Each branch adds a bump fragment instead, `.bumps/brain/<ticket>` containing `pa
    Until this runs, merged `brain/` changes are on `main` but installs will not pick them up.
 2. Tag the release: `claude plugin tag ./brain` (creates a `brain--v<version>` git tag — it tags the
    current version, it does **not** bump for you; there's no `npm version` equivalent).
-3. Commit via the branch → PR flow (the `main`-push guardrail; see HANDOVER).
+3. Commit via the branch → PR flow (the `main`-push guardrail).
 
 Consumers then pick it up with `claude plugin marketplace update` → `claude plugin update brain@agent-infra`
 (→ `/reload-plugins` or restart). *(Trade-off: an omitted marketplace `version` means the plugin's
