@@ -530,6 +530,40 @@ assert_eq "no-origin-head/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
 assert_prefix "no-origin-head/fast-forwarded" "FRESHNESS: OK - fast-forwarded 1 commit(s) from origin/main"   "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
 assert_eq "no-origin-head/head-equals-origin-main-sha" "$want" "$(vault_sha)" "$(evidence "$BOX")"
 
+# --- 15. INNOV-342: origin renamed its default => the NEW default is checked ---
+# The stale local origin/HEAD still names main and origin/main still exists, so a
+# resolve-before-fetch picked it, `fetch --prune` then deleted it, and rev-list's
+# `|| echo 0` read the vanished ref as 0 behind. A plain "skipped" is no better:
+# it exits 0 too, and hot.md is rewritten from the stale base either way.
+# Negative controls: resolve before the fetch => "up to date with origin/main";
+# drop the `remote set-head --auto` re-read => "skipped", HEAD unmoved.
+echo "--- 15. origin default renamed: fast-forwarded from the new default ---"
+sb_new
+git --git-dir="$ORIGIN" branch -m main trunk
+git --git-dir="$ORIGIN" symbolic-ref HEAD refs/heads/trunk
+DEF="trunk"
+printf 'hot cache v1' >"$SEED/wiki/hot.md"
+git -C "$SEED" commit --quiet -am "teammate, on the renamed default"
+git -C "$SEED" push --quiet origin HEAD:trunk
+want="$(origin_sha)"
+run_fresh "$VAULT"
+assert_eq "renamed/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
+assert_prefix "renamed/fast-forwarded-from-trunk" "FRESHNESS: OK - fast-forwarded 1 commit(s) from origin/trunk" "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
+assert_eq "renamed/head-equals-origin-trunk-sha" "$want" "$(vault_sha)" "$(evidence "$BOX")"
+
+# --- 16. INNOV-342: origin/<default> never fetched => the fetch finds it ------
+# Resolving before the fetch reported "skipped" for a ref the fetch would have
+# created. Negative control: fetch after the resolve and this reports skipped.
+echo "--- 16. origin/main not fetched yet: fetched, then fast-forwarded ---"
+sb_new
+git -C "$VAULT" update-ref -d refs/remotes/origin/main
+seed_push "teammate" "wiki/hot.md" "hot cache v1"
+want="$(origin_sha)"
+run_fresh "$VAULT"
+assert_eq "unfetched/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
+assert_prefix "unfetched/fast-forwarded" "FRESHNESS: OK - fast-forwarded 1 commit(s) from origin/main" "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
+assert_eq "unfetched/head-equals-origin-main-sha" "$want" "$(vault_sha)" "$(evidence "$BOX")"
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"

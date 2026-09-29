@@ -64,34 +64,46 @@ fi
 
 BRANCH="$(git -C "$VAULT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo HEAD)"
 
-# --- 1. upstream default branch --------------------------------------------
-# INNOV-332: a hard-coded origin/main|master loop here once skipped every vault
-# whose default is anything else (e.g. trunk). The ref must exist before it is
-# used: rev-list against a missing ref reads as "0 behind", a false OK.
-UPSTREAM=""
-if git -C "$VAULT" remote get-url origin >/dev/null 2>&1; then
-  DEFAULT="$(detect_default_branch)"
-  # Same safety net branch_is_protected() uses when detection comes up empty.
-  if [[ -z "$DEFAULT" ]]; then
-    for cand in main master; do
-      if git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/origin/$cand" >/dev/null 2>&1; then
-        DEFAULT="$cand"
-        break
-      fi
-    done
-  fi
-  if [[ -n "$DEFAULT" ]] && git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT" >/dev/null 2>&1; then
-    UPSTREAM="origin/$DEFAULT"
-  fi
+# --- 1. refresh refs only (never touches the working tree) ------------------
+if ! git -C "$VAULT" remote get-url origin >/dev/null 2>&1; then
+  echo "FRESHNESS: OK - no origin remote, freshness check skipped"
+  exit 0
 fi
-if [[ -z "$UPSTREAM" ]]; then
-  echo "FRESHNESS: OK - no origin/<default> ref, freshness check skipped"
+if ! git -C "$VAULT" fetch --prune origin >/dev/null 2>&1; then
+  echo "FRESHNESS: OK - origin unreachable, freshness check skipped"
   exit 0
 fi
 
-# --- 2. refresh refs only (never touches the working tree) ------------------
-if ! git -C "$VAULT" fetch --prune origin >/dev/null 2>&1; then
-  echo "FRESHNESS: OK - origin unreachable, freshness check skipped"
+# --- 2. upstream default branch --------------------------------------------
+# INNOV-332: a hard-coded origin/main|master loop here once skipped every vault
+# whose default is anything else (e.g. trunk). The ref must exist before it is
+# used: rev-list against a missing ref reads as "0 behind", a false OK.
+# INNOV-342: so it is resolved AFTER the fetch. Resolved before, a ref that
+# `--prune` deleted (origin renamed its default) read as "up to date", and a ref
+# the fetch would have created read as "skipped". And a fetch never refreshes
+# origin/HEAD, so when it names a branch that no longer exists, re-read it from
+# origin once — skipping there would still let hot.md be rewritten from a stale base.
+UPSTREAM=""
+DEFAULT="$(detect_default_branch)"
+if [[ -n "$DEFAULT" ]] && ! git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT" >/dev/null 2>&1; then
+  if git -C "$VAULT" remote set-head origin --auto >/dev/null 2>&1; then
+    DEFAULT="$(detect_default_branch)"
+  fi
+fi
+# Same safety net branch_is_protected() uses when detection comes up empty.
+if [[ -z "$DEFAULT" ]]; then
+  for cand in main master; do
+    if git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/origin/$cand" >/dev/null 2>&1; then
+      DEFAULT="$cand"
+      break
+    fi
+  done
+fi
+if [[ -n "$DEFAULT" ]] && git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT" >/dev/null 2>&1; then
+  UPSTREAM="origin/$DEFAULT"
+fi
+if [[ -z "$UPSTREAM" ]]; then
+  echo "FRESHNESS: OK - no origin/<default> ref, freshness check skipped"
   exit 0
 fi
 
