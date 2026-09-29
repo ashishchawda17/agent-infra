@@ -98,6 +98,12 @@ if [[ -z "$REAL_NODE" ]]; then
 fi
 pass "harness/node-available"
 
+# The auditor reads the vault-side carve-out (INNOV-306), so an inherited
+# BRAIN_ROOT would let the real vault flip these results. Default to an empty
+# one; tests that need a vault set BRAIN_ROOT inline.
+mkdir -p "$TMPROOT/novault"
+export BRAIN_ROOT="$(to_native "$TMPROOT/novault")"
+
 AOUT="$TMPROOT/audit.out"
 AERR="$TMPROOT/audit.err"
 
@@ -380,6 +386,60 @@ assert_eq "both-directions/missing-roots-takes-precedence" "MISSING-ROOTS" "$(au
   "output: [$(audit_all)]"
 assert_contains "both-directions/out-of-scope-still-reported" "src/jest.config.js" "$(audit_all)"
 
+# INNOV-306: a directory the VAULT-SIDE carve-out drops deliberately is not a
+# finding. hub-frontend carved out design-system/ (a doc plus its one .py
+# generator) and the audit refused every build for it, telling the operator to
+# add the carve-out that was already there.
+REPO_DS="$TMPROOT/repoDs"
+make_repo "$REPO_DS" src
+mkdir -p "$REPO_DS/design-system"
+printf 'print(1)\n' >"$REPO_DS/design-system/gen-ds-twin.py"
+make_graph "$TMPROOT/d-ds.json" src/index.ts
+VAULT_DS="$TMPROOT/vaultDs"
+mkdir -p "$VAULT_DS/graphify/dsrepo"
+printf '# carve-out\nnode_modules/\n\n/design-system/\n' >"$VAULT_DS/graphify/dsrepo/.graphifyignore"
+run_ds() { # vault name -> exit code
+  BRAIN_ROOT="$(to_native "$1")" node "$(to_native "$AUDIT")" \
+    --graph "$(to_native "$TMPROOT/d-ds.json")" --repo-root "$(to_native "$REPO_DS")" \
+    --name "$2" >"$AOUT" 2>"$AERR"
+  echo $?
+}
+
+status="$(run_ds "$VAULT_DS" dsrepo)"
+assert_eq "vault-carve-out/honoured-exit-0" "0" "$status" "output: [$(audit_all)]"
+assert_contains "vault-carve-out/ok-names-the-carved-dir" "carved out vault-side: design-system" "$(audit_all)"
+
+# Negative control: the same checkout with no vault-side carve-out still refuses.
+status="$(run_ds "$TMPROOT/novault" dsrepo)"
+assert_eq "vault-carve-out/absent-still-missing-roots" "MISSING-ROOTS" "$(audit_verdict)" "output: [$(audit_all)]"
+assert_contains "vault-carve-out/absent-names-the-dir" "design-system/" "$(audit_all)"
+
+# A carve-out only in the checkout copy is a disposable build input, not a
+# reviewed one, so it must not clear the finding.
+printf 'design-system/\n' >"$REPO_DS/.graphifyignore"
+status="$(run_ds "$TMPROOT/novault" dsrepo)"
+assert_eq "vault-carve-out/checkout-copy-is-not-honoured" "MISSING-ROOTS" "$(audit_verdict)" "output: [$(audit_all)]"
+rm -f "$REPO_DS/.graphifyignore"
+
+# The vault is autocrlf: a CRLF carve-out must match the same way.
+VAULT_CRLF="$TMPROOT/vaultCrlf"
+mkdir -p "$VAULT_CRLF/graphify/dsrepo"
+printf '# carve-out\r\nnode_modules/\r\ndesign-system/\r\n' >"$VAULT_CRLF/graphify/dsrepo/.graphifyignore"
+status="$(run_ds "$VAULT_CRLF" dsrepo)"
+assert_eq "vault-carve-out/crlf-honoured-exit-0" "0" "$status" "output: [$(audit_all)]"
+
+# A carve-out for a different directory does not cover this one.
+VAULT_OTHER="$TMPROOT/vaultOther"
+mkdir -p "$VAULT_OTHER/graphify/dsrepo"
+printf 'design-system-old/\ndesign/\n' >"$VAULT_OTHER/graphify/dsrepo/.graphifyignore"
+status="$(run_ds "$VAULT_OTHER" dsrepo)"
+assert_eq "vault-carve-out/other-dir-still-missing-roots" "MISSING-ROOTS" "$(audit_verdict)" "output: [$(audit_all)]"
+
+# --name must not traverse out of graphify/: ../graphify/dsrepo would otherwise
+# read a carve-out belonging to a different target.
+status="$(run_ds "$VAULT_DS" ../graphify/dsrepo)"
+assert_eq "vault-carve-out/traversing-name-not-read" "MISSING-ROOTS" "$(audit_verdict)" "output: [$(audit_all)]"
+
 echo "--- E. SKIPPED is never OK ---"
 
 # 1. no --repo-root => direction (b) never ran. Clean (a) is NOT an OK.
@@ -561,6 +621,21 @@ if [[ -f "$box/vault/graphify/demorepo/graph.json" ]]; then
     "output: [$(cat "$box/all.txt")]"
 else
   pass "gate/missing-roots-nothing-copied"
+fi
+
+# --- 3b. a vault-side carve-out clears it, and the mirror syncs (INNOV-306)
+box="$(new_gate_box)"
+add_repo "$box" demorepo src services hooks
+mkdir -p "$box/vault/graphify/demorepo"
+printf 'hooks/\r\n' >"$box/vault/graphify/demorepo/.graphifyignore"
+make_graph "$box/repos/demorepo/graphify-out/graph.json" src/index.ts services/index.ts
+status="$(run_gate "$box" "$box/repos/demorepo")"
+assert_eq "gate/vault-carve-out-exit-0" "0" "$status" "output: [$(cat "$box/all.txt")]"
+if [[ -f "$box/vault/graphify/demorepo/graph.json" ]]; then
+  pass "gate/vault-carve-out-mirror-published"
+else
+  fail "gate/vault-carve-out-mirror-published" "a deliberately carved-out dir must not refuse the mirror" \
+    "output: [$(cat "$box/all.txt")]"
 fi
 
 # --- 4. a refusal does not stop the other mirrors ------------------------

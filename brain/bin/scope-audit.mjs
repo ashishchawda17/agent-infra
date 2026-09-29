@@ -300,9 +300,34 @@ function dirHasSource(absDir, relPrefix, depth) {
   return false;
 }
 
+// Top-level dirs the VAULT-SIDE carve-out drops deliberately (INNOV-306). Only
+// the vault copy counts: it is the reviewed one, while the checkout copy is a
+// disposable build input, and honouring it would bring back the unreviewable
+// ignore file this module exists to replace. The name must be one path segment
+// so a traversing --name cannot read another target's carve-out. Direction (b)
+// only tests top-level names, so plain line matching is enough — no globs, and
+// `!negation` lines are forbidden by the standard anyway.
+function vaultCarvedRoots() {
+  const name = label || mirror;
+  const carved = new Set();
+  if (!/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(name)) return carved;
+  let text;
+  try {
+    text = readFileSync(join(VAULT, 'graphify', name, '.graphifyignore'), 'utf8');
+  } catch {
+    return carved;
+  }
+  for (const line of text.split(/\r?\n/)) {
+    const p = line.trim().replace(/^\/+/, '').replace(/\/+$/, '');
+    if (p && !p.startsWith('#') && !p.startsWith('!')) carved.add(p.toLowerCase());
+  }
+  return carved;
+}
+
 let rootsDeterminable = false;
 const sourceRoots = [];
 const missingRoots = [];
+const carvedRoots = [];
 
 if (repoRootAbs) {
   let topEntries = null;
@@ -313,11 +338,13 @@ if (repoRootAbs) {
   }
   if (topEntries) {
     rootsDeterminable = true;
+    const carved = vaultCarvedRoots();
     for (const e of topEntries) {
       if (!e.isDirectory()) continue;
       if (e.name.startsWith('.')) continue;
       if (NEVER_SOURCE_ROOT.has(e.name.toLowerCase())) continue;
       if (!dirHasSource(join(repoRootAbs, e.name), e.name + '/', MAX_DEPTH)) continue;
+      if (carved.has(e.name.toLowerCase())) { carvedRoots.push(e.name); continue; }
       sourceRoots.push(e.name);
       if (!topDirsWithNodes.has(e.name.toLowerCase())) missingRoots.push(e.name);
     }
@@ -343,6 +370,7 @@ const REMEDY_ROOTS = [
   '  Either widen the recorded scope row for this repo in the vault CLAUDE.md so it',
   '  covers these directories, or (preferred) build from the workspace root and let',
   `  graphify/${NAME}/.graphifyignore carve back the standard denylist. Then rebuild.`,
+  `  A directory that is deliberately out clears by listing it in that vault-side file.`,
 ];
 
 if (missingRoots.length > 0) {
@@ -384,6 +412,7 @@ if (outOfScopeDeterminable && rootsDeterminable) {
     `${nodes.length} nodes / ${files.size} files, 0 out of scope, ${sourceRoots.length} source root(s) all present`,
     [
       `  source roots covered: ${sourceRoots.join(' ') || '(none found in the checkout)'}`,
+      ...(carvedRoots.length ? [`  carved out vault-side: ${carvedRoots.join(' ')}`] : []),
       ...prefixLines,
     ],
   );
