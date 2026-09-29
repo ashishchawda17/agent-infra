@@ -46,8 +46,19 @@ Run these in order. Steps 1–3 clear yesterday; 4 is the only one needing judgm
 Anything `in-review` with an open PR still needs your review. Anything `in-progress`
 with no PR either died or is still working — check its terminal before assuming.
 
-**2. Batch the summaries into one `/brain:save`.** Read the full comments
-(`orca worktree ps --json`), then run `/brain:save` **once** for the whole batch.
+**2. Batch the summaries into one `/brain:save`.** First bring the main checkout onto
+the base branch, so the save builds its graph from the merged code and the merge
+listing below sees every PR:
+```bash
+( . "$WAVE/lib.sh" && cd "$MAIN_CHECKOUT" && git fetch --prune origin \
+    && git switch "$BASE_BRANCH" && git merge --ff-only "$WAVE_BASE" )
+```
+Fast-forward only. If git refuses (uncommitted changes, or the branch has diverged),
+stop and resolve it by hand — never force it. `/brain:save` fast-forwards the *vault*,
+not this repo.
+
+Then read the full comments
+(`orca worktree ps --json`), and run `/brain:save` **once** for the whole batch.
 Never per worktree: `wiki/hot.md` is a single ≤500-word rolling cache, and three
 near-duplicate entries crowd out everything else. Workers deliberately do not save.
 
