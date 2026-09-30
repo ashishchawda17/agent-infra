@@ -73,6 +73,9 @@ Lines to look for, all from the pre-PR review (`spawn.sh` step 4.5):
 `ARCHITECTURE REVIEWER: grok` means a named risk trigger called for an adversarial
 review; `TIE-BREAKER: astra` means those two reviews directly conflicted.
 `REVIEWER DISMISSED:` is a finding the worker judged wrong — check whether it was.
+`NOT FILED:` (PR body) is a real but never-observed gap the worker chose not to ticket —
+file it yourself if you know of an instance. `REVIEW ROUNDS: 3` means findings were
+still open when the review loop hit its cap.
 Any `NO ... REVIEW:` marker blocks the PR and needs human review; it is not a reason to
 try another provider. `REVIEWER: grok-fallback` or `sonnet-fallback (codex quota
 exhausted)` means the gate ran on a weaker reviewer, so read that diff yourself.

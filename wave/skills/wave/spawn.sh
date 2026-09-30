@@ -58,14 +58,28 @@ PROMPT="WAVE WORKER (round $ROUND; successor opt-in).
    and stop for human review.
 
    Triage the findings YOURSELF - do not forward them to the human. For each:
-   - real bug, or a CLAUDE.md rule it caught: fix it, run the narrow affected test,
-     then re-run /preflight once before opening the PR.
+   - real bug in code your diff touches, or a CLAUDE.md rule it caught: fix it and
+     run the narrow affected test.
    - wrong, or noise: dismiss it and record it in your step-7 summary as
      REVIEWER DISMISSED: <finding> - <why>
+   - real, but in code your diff does not touch: step 6 decides whether it becomes
+     a ticket.
+   If you fixed anything, re-run the same review command on the new diff and triage
+   again. Stop after 3 review rounds in total, or earlier on a round with nothing left
+   to fix. A real finding still open after round 3 goes to step 6; say in the summary
+   REVIEW ROUNDS: <n>. Then re-run /preflight once before opening the PR.
    The human reads your triage, not the raw findings. Copy REVIEWER, ARCHITECTURE
    REVIEWER, and TIE-BREAKER lines into your step-7 summary when they exist.
 5. Open the PR against $BASE_BRANCH, $TRACKER_ATTACH, set the issue $WAVE_STATE_DONE.
-6. File follow-ups to $WAVE_FILE_TO, and never with the agent-ready label. That label
+6. File follow-ups to $WAVE_FILE_TO, but only if you OBSERVED them - they broke on real data, a real repo, or
+   a real run - or your own diff makes them worse. A gap that is only possible (no
+   known instance, not reproduced, a hypothetical input) is not a ticket: write it
+   in the PR body as
+     NOT FILED: <finding> - <why no instance exists> - <where it lives, file:line>
+   The PR body is durable and searchable, so nothing is lost; the backlog only
+   carries work somebody hit. When unsure, check the real vault or repo read-only
+   (e.g. git grep on origin/<branch>); zero hits means NOT FILED.
+   Never file with the agent-ready label. That label
    is the human's gate on what is safe to hand an unsupervised worker; a worker that
    labels its own follow-ups feeds the loop work nobody vetted.
 7. Record a summary for the human review batch - do NOT run /brain:save:
