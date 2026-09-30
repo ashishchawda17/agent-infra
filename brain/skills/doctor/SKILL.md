@@ -31,7 +31,7 @@ Resolve the vault as `$BRAIN_ROOT` (else cwd). **Pinned graphify version: `0.8.4
 6. **Local graph (cwd repo)** — `graphify-out/graph.json` present (so the hook fires) and, if `graphify-out/.graphify_python` exists, it points at an interpreter that still exists. Stale → R4.
    Whether a missing graph is *optional* depends on whether the cwd feeds a vault mirror — `sync-graph.sh` builds `graphify/<name>/` by copying this checkout's `graphify-out/graph.json`, so no local graph means that mirror silently stops updating. **Run the script, don't reason about it (INNOV-338):**
    ```bash
-   bash "${CLAUDE_PLUGIN_ROOT}/bin/check-mirror-source.sh" --checkout "$PWD"   # with BRAIN_ROOT=<vault> set
+   bash "${CLAUDE_PLUGIN_ROOT}/bin/check-mirror-source.sh" --checkout "$PWD"   # with BRAIN_ROOT=<vault> and REPOS_DIR set (check 4b's pair)
    ```
    It prints one line; branch on the **first token**:
    - **`OK <name> <path>` →** ✅ graph present, feeds mirror `<name>`.
