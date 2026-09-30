@@ -286,6 +286,37 @@ else
   fail "json/unverifiable-gitignored" "got: [$(cat "$TMPROOT/ign.json")]"
 fi
 
+# --- 9. a link to a wiki note's `aliases:` entry is not dead (INNOV-364) ----
+# Obsidian resolves [[<alias>]] to the note, and so does the connectivity
+# section (nameToFile). The dead-link check must agree. One LF and one CRLF
+# note carry aliases; a link to nobody's basename or alias stays dead.
+BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+VAULT="$BOX/vault"
+mkdir -p "$VAULT/wiki"
+printf -- '---\nid: target-lf\naliases:\n  - Other Name\n---\n# T\n' >"$VAULT/wiki/target-lf.md"
+printf -- '---\r\nid: target-crlf\r\naliases:\r\n  - "Crlf Alias"\r\n---\r\n# T\r\n' >"$VAULT/wiki/target-crlf.md"
+printf -- 'See [[Other Name]], [[Crlf Alias|shown]] and [[Nobody At All]].\n' >"$VAULT/wiki/linker.md"
+( cd "$BOX" && BRAIN_ROOT="$VAULT" node "$FRESH" --stdout ) >"$BOX/out.md" 2>/dev/null
+( cd "$BOX" && BRAIN_ROOT="$VAULT" node "$FRESH" --json ) >"$BOX/out.json" 2>/dev/null
+for a in 'Other Name' 'Crlf Alias'; do
+  if grep -qF "\`$a\`" "$BOX/out.md"; then
+    fail "note-alias/not-dead:$a" "[[${a}]] reported dead: [$(grep -F "$a" "$BOX/out.md")]"
+  else
+    pass "note-alias/not-dead:$a"
+  fi
+done
+if grep -qF '`Nobody At All`' "$BOX/out.md" && grep -qF 'Dead `[[wikilinks]]` (1)' "$BOX/out.md"; then
+  pass "note-alias/dead-control"
+else
+  fail "note-alias/dead-control" "expected exactly [[Nobody At All]] dead: [$(grep -F 'Dead' "$BOX/out.md")]"
+fi
+if node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).filter(f=>f.kind==="dead-link");
+  process.exit(a.length===1&&a[0].target==="Nobody At All"?0:1)' "$BOX/out.json" 2>/dev/null; then
+  pass "note-alias/json-dead-only-control"
+else
+  fail "note-alias/json-dead-only-control" "got: [$(cat "$BOX/out.json")]"
+fi
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"

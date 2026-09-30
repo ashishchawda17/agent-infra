@@ -130,6 +130,9 @@ function parseNote(file) {
 }
 
 const parsed = notes.map(parseNote);
+// A wiki note's `aliases:` are link targets too: Obsidian resolves [[<alias>]]
+// to the note, and so does the connectivity section's nameToFile (INNOV-364).
+for (const n of parsed) for (const a of fileAliases(n.text)) targetSet.add(a);
 
 // index.md + hot.md links count as inbound references for orphan detection.
 const inbound = new Set();
