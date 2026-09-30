@@ -73,6 +73,8 @@ done
   printf 'for a in "$@"; do\n'
   printf '  case "$a" in\n'
   printf '    *resolve-repos.mjs) exec %q "$@" ;;\n' "$REAL_NODE"
+  # the gate reads built_at_commit with an inline script
+  printf '    -e)                 exec %q "$@" ;;\n' "$REAL_NODE"
   printf '  esac\n'
   printf 'done\n'
   printf 'exit 0\n'
@@ -219,6 +221,16 @@ assert_eq "squash-merged/exit-1" "1" "$st"
 assert_not_contains "squash-merged/NOT-published" "$(mirror)" "REBUILT"
 assert_contains "squash-merged/names-the-commit" "$(err)" "${S1:0:12}"
 
+# Only the ROOT built_at_commit counts. A node that happens to carry an attribute
+# of the same name, naming a commit that IS on main, must not vouch for the graph.
+reset_case "$F1"
+printf '{"nodes":[{"id":"REBUILT","built_at_commit":"%s"}],"links":[],"built_at_commit":"%s"}\n' "$M2" "$F1" \
+  >"$APP/graphify-out/graph.json"
+st="$(run_sync)"
+assert_eq "nested-key/root-commit-decides/exit-1" "1" "$st"
+assert_not_contains "nested-key/NOT-published" "$(mirror)" "REBUILT"
+assert_contains "nested-key/names-the-root-commit" "$(err)" "${F1:0:12}"
+
 # A refusal is THAT MIRROR ONLY: a second mirror in the same run still syncs.
 reset_case "$F1"
 mkdir -p "$V/graphify/plain"
@@ -243,6 +255,17 @@ assert_skipped() { # label reason_fragment
 reset_case ""
 st="$(run_sync)"
 assert_skipped "no-built-at-commit" "no built_at_commit"
+
+# ...and a nested one is not a root one: this graph states no build commit.
+reset_case ""
+printf '{"nodes":[{"id":"REBUILT","built_at_commit":"%s"}],"links":[]}\n' "$F1" >"$APP/graphify-out/graph.json"
+st="$(run_sync)"
+assert_skipped "nested-key-only" "no built_at_commit"
+
+reset_case "$M2"
+printf '{"nodes":["REBUILT"' >"$APP/graphify-out/graph.json"   # truncated write
+st="$(run_sync)"
+assert_skipped "unparsable-graph" "could not be read"
 
 reset_case "0123456789abcdef0123456789abcdef01234567"
 st="$(run_sync)"

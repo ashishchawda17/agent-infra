@@ -441,10 +441,13 @@ fi
 provenance_check() { # graph_path repo_path mirror_name
   local graph="$1" repo="$2" nm="$3" sha="" branch="" how="" rc=0 i=0
   PROV_VERDICT="SKIPPED"
-  # First match only. grep rather than node: no interpreter start per mirror, and
-  # a quoted key inside a node's label is escaped (\"), so it cannot match.
-  sha="$(grep -o '"built_at_commit"[[:space:]]*:[[:space:]]*"[^"]*"' "$graph" 2>/dev/null | head -n 1 \
-    | sed 's/.*:[[:space:]]*"//; s/"$//' || true)"
+  # The ROOT property only, so a real JSON parse: a textual match would also find
+  # a node attribute of the same name, and pass or refuse on the wrong commit.
+  sha="$(node -e 'const v = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).built_at_commit;
+    if (typeof v === "string") process.stdout.write(v);' "$graph" 2>/dev/null)" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    PROV_DETAIL="graph.json could not be read for its built_at_commit (node, or the file itself)"; return 0
+  fi
   if [[ -z "$sha" ]]; then
     PROV_DETAIL="graph.json carries no built_at_commit (rebuild it with a current graphify)"; return 0
   fi
