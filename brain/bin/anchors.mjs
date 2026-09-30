@@ -108,6 +108,30 @@ export function parseFrontmatter(text) {
 }
 
 /**
+ * The frontmatter enums (INNOV-294) — the one definition, shared by the weekly
+ * report (freshness.mjs) and the promote gate (check-anchors.mjs).
+ */
+export const ENUMS = [
+  ['confidence', ['high', 'medium', 'low']],
+  ['status', ['current', 'superseded', 'falsified']],
+];
+
+/** An enum field's value. A trailing YAML comment is not part of it (`#` after
+ *  whitespace — so this cannot eat a `#anchor`). */
+export const enumValue = (raw) => raw.replace(/\s+#.*$/, '');
+
+/**
+ * Enum fields of one note's frontmatter that are outside their enum. Only
+ * validated when present: absent `status:` means `current`, and a missing
+ * `confidence:` is not this check's concern.
+ */
+export function malformedEnums(fm) {
+  return ENUMS.filter(([key, allowed]) => key in fm && !allowed.includes(enumValue(fm[key]))).map(
+    ([key, allowed]) => ({ key, value: fm[key], allowed })
+  );
+}
+
+/**
  * Build everything anchor resolution needs for one vault, once. Callers classify
  * many notes against a single context — discovery is the expensive part.
  */

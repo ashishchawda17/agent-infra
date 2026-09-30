@@ -57,7 +57,7 @@ bin/harvest-chats.mjs   →  chats/<repo>/*.md (status: raw)
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/bin/check-anchors.mjs" wiki/_drafts/<new-draft>.md   # from the vault root, or with BRAIN_ROOT=<vault> set
    ```
-   Keep the `source:` only on exit `0` (`ANCHORS: OK`). On any other result (broken, git-ignored, off-machine or otherwise unverifiable), delete the `source:` line; do not guess another path. A draft with no `source:` is the expected result. Across `wiki/_drafts/` that makes exit `2` normal, not a failure to fix; `/brain:promote` asks for the anchor.
+   Keep the `source:` only on exit `0` (`ANCHORS: OK`). On any other result (broken, git-ignored, off-machine or otherwise unverifiable), delete the `source:` line; do not guess another path. The one exception is a `BROKEN` line that names a malformed `confidence:` / `status:`: fix that value and re-run, then judge the anchor on the re-run's result. A draft with no `source:` is the expected result. Across `wiki/_drafts/` that makes exit `2` normal, not a failure to fix; `/brain:promote` asks for the anchor.
 
    Body: the atomic fact, cross-linked with `[[wikilinks]]` to related notes. Add the `Code:` community line if it maps to a graph community (see `CLAUDE.md`). Because it's a draft, **flag what still needs verifying against live code** before promotion.
 

@@ -429,6 +429,59 @@ run_check
 assert_eq "tracked-vault-local/exit-0" "0" "$STATUS" "$(evidence)"
 assert_out_has "tracked-vault-local/counts" "1 verified, 0 broken, 0 unverifiable" "$(evidence)"
 
+# --- 13. frontmatter enums are gated, not just described (INNOV-341) ------
+# INNOV-334 fixed the prose; this is the exit code. A keeper whose
+# `confidence:` or `status:` is outside the INNOV-294 enums is a stop, with a
+# perfectly good anchor or with none at all.
+echo "--- 13. frontmatter enums ---"
+sb_new
+mknote trusted "demo/src/a.js" "status: trusted"
+run_check
+assert_eq "enum/status-trusted-exit-1" "1" "$STATUS" "$(evidence)"
+assert_prefix "enum/first-line-BROKEN" "ANCHORS: BROKEN" "$(first_line "$BOX/err.txt")" "$(evidence)"
+assert_out_has "enum/names-note-and-value" 'wiki/_drafts/trusted.md — `status: trusted`' "$(evidence)"
+assert_out_has "enum/anchor-still-counted-verified" "1 verified, 0 broken, 0 unverifiable" "$(evidence)"
+assert_out_has "enum/count-on-first-line" "1 malformed enum(s)" "$(evidence)"
+assert_out_lacks "enum/no-rot-claim-for-a-good-anchor" "These anchors are rot" "$(evidence)"
+
+# Negative control: the same note with a value inside the enum is clean, and
+# its first line carries no enum suffix at all.
+sb_new
+mknote superseded "demo/src/a.js" "status: superseded"
+run_check
+assert_eq "enum/valid-status-exit-0" "0" "$STATUS" "$(evidence)"
+assert_out_lacks "enum/clean-path-has-no-suffix" "malformed enum" "$(evidence)"
+
+# CRLF: the vault is autocrlf, so `status: trusted\r` must still be read as
+# `trusted` (flagged) and `status: current\r` as `current` (clean).
+sb_new
+printf -- '---\r\nid: crlf-bad\r\nsource: demo/src/a.js\r\nconfidence: medium\r\nstatus: trusted\r\n---\r\n# c\r\n' >"$VAULT/wiki/_drafts/crlf-bad.md"
+run_check
+assert_eq "enum/crlf-bad-exit-1" "1" "$STATUS" "$(evidence)"
+assert_out_has "enum/crlf-names-value" '`status: trusted`' "$(evidence)"
+sb_new
+printf -- '---\r\nid: crlf-ok\r\nsource: demo/src/a.js\r\nconfidence: medium\r\nstatus: current\r\n---\r\n# c\r\n' >"$VAULT/wiki/_drafts/crlf-ok.md"
+run_check
+assert_eq "enum/crlf-ok-exit-0" "0" "$STATUS" "$(evidence)"
+
+# `confidence:` is gated too, and a trailing YAML comment is not part of the
+# value — wiki-ingest's own template writes one.
+sb_new
+mknote conf-bad "demo/src/a.js" "confidence: high (decision)"
+mknote conf-comment "demo/src/a.js" "confidence: low      # drafts start low; review bumps it"
+run_check
+assert_eq "enum/bad-confidence-exit-1" "1" "$STATUS" "$(evidence)"
+assert_out_has "enum/names-bad-confidence" 'wiki/_drafts/conf-bad.md — `confidence: high (decision)`' "$(evidence)"
+assert_out_lacks "enum/commented-value-is-clean" "conf-comment.md" "$(evidence)"
+
+# A bad enum outranks an advisory: a note with NO source: would otherwise exit
+# 2 and be promotable on the user's say-so.
+sb_new
+mknote bare "" "status: trusted"
+run_check
+assert_eq "enum/no-source-still-exit-1" "1" "$STATUS" "$(evidence)"
+assert_out_has "enum/no-source-named" 'wiki/_drafts/bare.md — `status: trusted`' "$(evidence)"
+
 # ============================================ promote never writes status: ==
 # INNOV-334: promote runs wrote `status: trusted` into 14 notes. `status:` is
 # reserved for current|superseded|falsified (INNOV-294) and freshness flags
@@ -437,6 +490,7 @@ SKILL="$REPO_ROOT/brain/skills/promote/SKILL.md"
 for want in \
   'Never write `status:`' \
   '`status:` — optional; if present, exactly `current`, `superseded` or `falsified`' \
+  'and the gate below refuses it' \
   'Stripping `draft: true` **is** the promotion'; do
   if grep -qF -- "$want" "$SKILL"; then
     pass "promote-skill/has:$want"
