@@ -1,10 +1,11 @@
 #!/usr/bin/env bash
-# test-doctor-checks.sh — quality gate for /brain:doctor checks 7, 8, 9, 12 and 13:
+# test-doctor-checks.sh — quality gate for /brain:doctor checks 6, 7, 8, 9, 12 and 13:
 #   brain/bin/check-plugin-version.sh   (INNOV-277)
 #   brain/bin/check-allowlist.sh        (INNOV-278)
 #   brain/bin/check-gitignore.sh        (INNOV-281)
 #   brain/bin/check-shadow-install.sh   (INNOV-318, check 12)
 #   brain/bin/check-command-prefix.sh   (INNOV-318, check 13)
+#   brain/bin/check-mirror-source.sh    (INNOV-338, check 6)
 # plus check 7 deriving its own plugin key (INNOV-318).
 #
 # Both exist because a silent precondition failure cost this workstream real
@@ -665,6 +666,92 @@ else fail "prefix/matching-byte-identical" "--fix changed a file with nothing st
 BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"; VAULT="$BOX"
 run_prefix
 assert_prefix "prefix/non-vault-skipped" "COMMAND-PREFIX: SKIPPED" "$(first_line "$BOX/out.txt")" "$(evidence)"
+
+echo "--- H. check-mirror-source.sh (INNOV-338, check 6) ---"
+
+MIRROR_CHECK="$REPO_ROOT/brain/bin/check-mirror-source.sh"
+# The path form a native (non-Git-Bash) node reads from repos.local.json.
+native_path() { cygpath -m "$1" 2>/dev/null || printf '%s' "$1"; }
+
+# A vault whose mirror `brain-plugin` is fed by a checkout named `agent-infra` —
+# the INNOV-320 shape: mirror name != folder, so only repos.json can find it.
+# repos.json is written CRLF (the vault is autocrlf); no remote, so the cached
+# repos.local.json path is trusted without a git clone.
+mk_mvault() {
+  BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+  VAULT="$BOX/vault"; REPOS="$BOX/repos"
+  mkdir -p "$VAULT/wiki" "$VAULT/graphify/brain-plugin" "$REPOS/agent-infra" "$REPOS/other"
+  printf '{\r\n  "repos": {\r\n    "brain-plugin": {}\r\n  }\r\n}\r\n' >"$VAULT/repos.json"
+  printf '{ "brain-plugin": "%s" }\n' "$(native_path "$REPOS/agent-infra")" >"$VAULT/repos.local.json"
+}
+run_mirror() {
+  ( unset CLAUDE_PROJECT_DIR
+    BRAIN_ROOT="$VAULT" REPOS_DIR="$REPOS" bash "$MIRROR_CHECK" "$@"
+  ) >"$BOX/out.txt" 2>"$BOX/err.txt"
+  STATUS=$?
+}
+
+if ! command -v node >/dev/null 2>&1; then
+  # Never a silent zero-assertion pass: a missing node is a FAIL here, because
+  # every case below depends on resolve-repos.mjs.
+  fail "mirror/node-on-path" "node is required: check-mirror-source.sh resolves mirrors through resolve-repos.mjs"
+else
+
+# --- 38. mirrored checkout, no local graph => NO-GRAPH, exit 1 (CRLF) -------
+mk_mvault
+cr_count="$(tr -cd '\r' <"$VAULT/repos.json" | wc -c | tr -d ' ')"
+assert_eq "mirror/fixture-is-crlf" "5" "$cr_count"
+run_mirror --checkout "$REPOS/agent-infra"
+assert_eq "mirror/frozen-exit-1" "1" "$STATUS" "$(evidence)"
+assert_prefix "mirror/frozen-verdict" "NO-GRAPH brain-plugin " "$(first_line "$BOX/out.txt")" "$(evidence)"
+assert_contains "mirror/frozen-says-frozen" "the mirror is frozen until you run /graphify" "$(out_all)" "$(evidence)"
+assert_eq "mirror/frozen-not-optional" "0" "$(grep -c 'optional' "$BOX/out.txt" || true)" "$(evidence)"
+
+# --- 39. NEGATIVE CONTROL: unmirrored checkout, no local graph => optional --
+run_mirror --checkout "$REPOS/other"
+assert_eq "mirror/unmirrored-exit-0" "0" "$STATUS" "$(evidence)"
+assert_prefix "mirror/unmirrored-verdict" "UNMIRRORED " "$(first_line "$BOX/out.txt")" "$(evidence)"
+assert_contains "mirror/unmirrored-optional" "optional" "$(out_all)" "$(evidence)"
+
+# --- 40. mirrored checkout WITH a graph => OK -------------------------------
+mkdir -p "$REPOS/agent-infra/graphify-out"
+echo '{"nodes":[],"links":[]}' >"$REPOS/agent-infra/graphify-out/graph.json"
+run_mirror --checkout "$REPOS/agent-infra"
+assert_eq "mirror/ok-exit-0" "0" "$STATUS" "$(evidence)"
+assert_prefix "mirror/ok-verdict" "OK brain-plugin " "$(first_line "$BOX/out.txt")" "$(evidence)"
+
+# --- 41. matched by PATH, not remote: a second clone feeds nothing ----------
+# Same contents as the mirrored checkout, but sync copies from the resolved one.
+mkdir -p "$REPOS/agent-infra-2"
+run_mirror --checkout "$REPOS/agent-infra-2"
+assert_prefix "mirror/second-clone-unmirrored" "UNMIRRORED " "$(first_line "$BOX/out.txt")" "$(evidence)"
+
+# --- 42. no args iterates every mirror, one line each, verdict first --------
+mkdir -p "$VAULT/graphify/flat" "$REPOS/flat" "$VAULT/graphify/gone"
+run_mirror
+assert_eq "mirror/all-exit-1" "1" "$STATUS" "$(evidence)"
+assert_eq "mirror/all-verdicts" "OK brain-plugin|NO-GRAPH flat|UNRESOLVED gone|" \
+  "$(cut -d' ' -f1-2 <"$BOX/out.txt" | tr -d '\r' | tr '\n' '|')" "$(evidence)"
+
+# --- 43. named mirror; unknown name => NO-MIRROR ----------------------------
+run_mirror brain-plugin nope
+assert_eq "mirror/named-exit-0" "0" "$STATUS" "$(evidence)"
+assert_eq "mirror/named-verdicts" "OK|NO-MIRROR|" "$(cut -d' ' -f1 <"$BOX/out.txt" | tr '\n' '|')" "$(evidence)"
+
+# --- 44. no repos.json: sync's flat fallback, which the check must share -----
+rm -f "$VAULT/repos.json" "$VAULT/repos.local.json"
+run_mirror --checkout "$REPOS/flat"
+assert_prefix "mirror/flat-fallback-frozen" "NO-GRAPH flat " "$(first_line "$BOX/out.txt")" "$(evidence)"
+run_mirror --checkout "$REPOS/agent-infra"
+assert_prefix "mirror/flat-fallback-no-alias" "UNMIRRORED " "$(first_line "$BOX/out.txt")" "$(evidence)"
+
+# --- 45. not a vault => SKIPPED, exit 0 -------------------------------------
+BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"; VAULT="$BOX"; REPOS="$BOX"
+run_mirror --checkout "$BOX"
+assert_eq "mirror/non-vault-exit-0" "0" "$STATUS" "$(evidence)"
+assert_prefix "mirror/non-vault-skipped" "SKIPPED" "$(first_line "$BOX/out.txt")" "$(evidence)"
+
+fi
 
 echo
 echo "$PASSED passed, $FAILED failed"

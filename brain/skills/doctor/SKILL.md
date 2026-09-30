@@ -29,6 +29,17 @@ Resolve the vault as `$BRAIN_ROOT` (else cwd). **Pinned graphify version: `0.8.4
 4c. **Sub-path aliases in `repos.json`** — entries that have a `subPath` **and** no matching `graphify/` mirror folder are *aliases* (a directory inside some repo), not repos. Each alias **globally reserves its first segment**: every anchor in the vault starting with that segment resolves into the alias's repo, whatever area the note lives in — and if a same-named file exists there, it verifies GREEN against the wrong repo. **List them** with the repo they point into (e.g. `docs/ → repo-b`, `lib/ → repo-a`) so the operator knows which segments are reserved; call out generic ones every repo has (`lib`, `docs`, `scripts`, `src`). ⚠️ **informational, no repair** — aliases are load-bearing (they make anchors machine-independent) and freshness cross-checks each note's area against the resolved repo's remote; the point is that new aliases get added *deliberately*, knowing the reserved segment.
 5. **Registry health** — `~/.claude/brain/registry.json` parses as JSON; each vault `path` exists and is **OS-native absolute** (Windows `C:/...`, not git-bash `/c/...`, which `path.resolve` mangles). Bad form → R3.
 6. **Local graph (cwd repo)** — `graphify-out/graph.json` present (so the hook fires) and, if `graphify-out/.graphify_python` exists, it points at an interpreter that still exists. Stale → R4.
+   Whether a missing graph is *optional* depends on whether the cwd feeds a vault mirror — `sync-graph.sh` builds `graphify/<name>/` by copying this checkout's `graphify-out/graph.json`, so no local graph means that mirror silently stops updating. **Run the script, don't reason about it (INNOV-338):**
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/bin/check-mirror-source.sh" --checkout "$PWD"   # with BRAIN_ROOT=<vault> set
+   ```
+   It prints one line; branch on the **first token**:
+   - **`OK <name> <path>` →** ✅ graph present, feeds mirror `<name>`.
+   - **`NO-GRAPH <name> <path>` (exit `1`) →** ⚠️ **not optional.** Relay the line **verbatim** — the vault mirror `<name>` is frozen until `/graphify` runs here. Never call this "optional" or "only if you want the hook".
+   - **`UNMIRRORED <dir>` →** this checkout feeds no mirror; a missing `graphify-out/` is ⚠️ optional (only the cwd query hook needs it) — the old wording applies.
+   - **`SKIPPED - <reason>` →** ⚠️ "skipped — <reason>", never ✅. Skip if check 4 failed.
+
+   Run it with no arguments to list every mirror's source the same way (`UNRESOLVED <name>` = no checkout for it on this machine; sync skips it).
 7. **Brain plugin version drift** — check 3 does exactly this for graphify; this turns it on ourselves. **Run the script, don't reason about it:**
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/bin/check-plugin-version.sh"
@@ -151,6 +162,7 @@ Brain doctor — <vault name or path>
   repo aliases         ⚠️ 6 sub-path aliases reserve: android/ docs/ groovy/ lib/ scripts/ terraform/
   registry             ✅ 1 vault, paths valid + OS-native
   local graph (cwd)    ⚠️ graphify-out/ present · .graphify_python STALE → offer R4
+                       (or: ⚠️ NO-GRAPH brain-plugin — vault mirror is fed from this checkout and it has no graph; frozen until /graphify runs here)
   brain plugin         ❌ installed 0.2.19, marketplace offers 0.2.22 → offer R6
   vault allowlist      ❌ .saveinclude missing 1 of 7: graphify/ (bin/sync-graph.sh) → offer R7
   vault gitignore      ❌ .gitignore missing 1 of 6: .brain/ (machine-local session state) → offer R8

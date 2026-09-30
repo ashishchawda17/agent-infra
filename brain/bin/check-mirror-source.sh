@@ -1,0 +1,152 @@
+#!/usr/bin/env bash
+# check-mirror-source.sh — is each vault mirror's source checkout able to feed it?
+# (INNOV-338, /brain:doctor check 6)
+#
+# sync-graph.sh builds <vault>/graphify/<name>/ by COPYING
+# <checkout>/graphify-out/graph.json. It is never built vault-side. A checkout
+# with no local graph has nothing to copy, so sync skips the mirror and the
+# vault's view of that repo freezes at its last copy — silently. graphify-out/
+# is not in git, so every fresh clone of a mirrored repo lands in exactly this
+# state. Doctor used to call a missing local graph "optional" everywhere; it is
+# only optional in a checkout that feeds no mirror.
+#
+# The mirror -> checkout lookup is sync-graph.sh's, deliberately: the alias map
+# from `resolve-repos.mjs --print-paths` (repos.json + repos.local.json), else the
+# flat `$REPOS_DIR/<name>` fallback. A check that disagreed with sync about where
+# a mirror's source lives would warn about mirrors sync feeds fine, or miss the
+# ones it cannot. The resolved path already includes any subPath, and that is
+# where sync looks for graphify-out/ — so this looks there too.
+#
+# Usage:
+#   BRAIN_ROOT=<vault> bash check-mirror-source.sh              # every mirror
+#   BRAIN_ROOT=<vault> bash check-mirror-source.sh <name>...    # just these
+#   BRAIN_ROOT=<vault> bash check-mirror-source.sh --checkout <dir>
+#       # which mirror does <dir> feed? (doctor passes the cwd). Matched by PATH,
+#       # not by remote: a second clone of a mirrored repo feeds nothing unless it
+#       # is the checkout the resolver picked.
+#
+# Contract — ONE line per mirror on stdout; the FIRST TOKEN is the verdict:
+#   OK <name> <path>          source has graphify-out/graph.json
+#   NO-GRAPH <name> <path>    source exists but has no graph: mirror is FROZEN
+#   UNRESOLVED <name>         no source checkout found on this machine
+#   NO-MIRROR <name>          a named mirror that has no graphify/<name>/ folder
+#   UNMIRRORED <dir>          (--checkout) <dir> feeds no mirror: a local graph
+#                             is optional there (only the cwd query hook uses it)
+#   SKIPPED - <reason>        not measurable (no vault / no graphify/ / no node)
+# exit 1 => at least one NO-GRAPH line. exit 0 otherwise. WARN polarity: doctor
+# relays the line, nothing is blocked. Read-only: the resolver cache is never
+# written (--print-paths without --write).
+set -uo pipefail
+
+VAULT="${BRAIN_ROOT:-${CLAUDE_PROJECT_DIR:-$PWD}}"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
+CHECKOUT=""
+NAMES=()
+while [[ $# -gt 0 ]]; do
+  case "$1" in
+    --checkout) CHECKOUT="${2:-}"; shift 2 || shift ;;
+    --)         shift; while [[ $# -gt 0 ]]; do NAMES+=("$1"); shift; done ;;
+    *)          NAMES+=("$1"); shift ;;
+  esac
+done
+
+if [[ ! -d "$VAULT/graphify" ]]; then
+  echo "SKIPPED - no graphify/ under '$VAULT' (not a vault, or no mirrors yet)"
+  exit 0
+fi
+
+# REPOS_DIR default: the same probe sync-graph.sh uses, so both agree on the
+# flat fallback and on the resolver's discovery hint.
+if [[ -z "${REPOS_DIR:-}" ]]; then
+  REPOS_DIR="$VAULT/.."
+  for cand in "$VAULT/.." "$VAULT/../.."; do
+    for d in "$VAULT"/graphify/*/; do
+      [[ -d "$d" ]] || continue
+      if [[ -d "$cand/$(basename "$d")" ]]; then REPOS_DIR="$cand"; break 2; fi
+    done
+  done
+fi
+
+# --- the alias map (parallel arrays: bash 3.2 has no associative arrays) ------
+ALIAS_NAMES=()
+ALIAS_PATHS=()
+if [[ -f "$VAULT/repos.json" ]]; then
+  if ! command -v node >/dev/null 2>&1 || [[ ! -f "$SCRIPT_DIR/resolve-repos.mjs" ]]; then
+    # Guessing the flat layout here would call mirrors UNRESOLVED (or worse,
+    # NO-GRAPH on the wrong dir) that sync resolves fine through repos.json.
+    echo "SKIPPED - '$VAULT' has repos.json but node or resolve-repos.mjs is unavailable, mirror sources not resolvable"
+    exit 0
+  fi
+  while IFS=$'\t' read -r _n _p; do
+    _p="${_p%$'\r'}"
+    [[ -n "$_n" && -n "$_p" ]] || continue
+    ALIAS_NAMES+=("$_n")
+    ALIAS_PATHS+=("$_p")
+  done < <(node "$SCRIPT_DIR/resolve-repos.mjs" --vault "$VAULT" --repos-dir "$REPOS_DIR" --print-paths 2>/dev/null || true)
+fi
+
+# Where sync-graph.sh reads mirror <name> from: alias map, else flat layout.
+source_for() { # name
+  local i=0
+  while [[ $i -lt ${#ALIAS_NAMES[@]} ]]; do
+    if [[ "${ALIAS_NAMES[$i]}" == "$1" ]]; then printf '%s\n' "${ALIAS_PATHS[$i]}"; return 0; fi
+    i=$((i + 1))
+  done
+  printf '%s\n' "$REPOS_DIR/$1"
+}
+
+# Same canonicalization as sync-graph.sh's _norm_path: repos.local.json holds
+# native `C:/Users/...` while Git Bash hands us `/c/Users/...` — one directory,
+# two strings. Entering the dir renders both in the shell's own vocabulary.
+norm_path() {
+  local p="$1" real
+  if [[ -d "$p" ]] && real="$( (cd "$p" 2>/dev/null && pwd -P) )" && [[ -n "$real" ]]; then p="$real"; fi
+  printf '%s' "$p" | tr '\\' '/' | tr '[:upper:]' '[:lower:]' | sed 's#/*$##'
+}
+
+FROZEN=0
+report() { # name
+  local n="$1" src
+  if [[ ! -d "$VAULT/graphify/$n" ]]; then
+    echo "NO-MIRROR $n - no graphify/$n/ in the vault"
+    return 0
+  fi
+  src="$(source_for "$n")"
+  if [[ ! -d "$src" ]]; then
+    echo "UNRESOLVED $n - no source checkout found on this machine (looked for '$src'); sync skips this mirror"
+  elif [[ -f "$src/graphify-out/graph.json" ]]; then
+    echo "OK $n $src"
+  else
+    echo "NO-GRAPH $n $src - vault mirror '$n' is fed from this checkout and it has no graphify-out/graph.json; the mirror is frozen until you run /graphify there"
+    FROZEN=1
+  fi
+}
+
+MIRRORS=()
+for d in "$VAULT"/graphify/*/; do
+  [[ -d "$d" ]] && MIRRORS+=("$(basename "$d")")
+done
+
+if [[ -n "$CHECKOUT" ]]; then
+  want="$(norm_path "$CHECKOUT")"
+  hit=""
+  for n in ${MIRRORS[@]+"${MIRRORS[@]}"}; do
+    if [[ "$(norm_path "$(source_for "$n")")" == "$want" ]]; then hit="$n"; break; fi
+  done
+  if [[ -z "$hit" ]]; then
+    echo "UNMIRRORED $CHECKOUT - feeds no vault mirror; graphify-out/ is optional here (only the cwd graph query hook uses it)"
+    exit 0
+  fi
+  report "$hit"
+elif [[ ${#NAMES[@]} -gt 0 ]]; then
+  for n in "${NAMES[@]}"; do report "$n"; done
+else
+  if [[ ${#MIRRORS[@]} -eq 0 ]]; then
+    echo "SKIPPED - graphify/ under '$VAULT' holds no mirrors"
+    exit 0
+  fi
+  for n in "${MIRRORS[@]}"; do report "$n"; done
+fi
+
+exit $FROZEN
