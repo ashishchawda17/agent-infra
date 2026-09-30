@@ -132,6 +132,7 @@ fi
 BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
 VAULT="$BOX/vault"
 mkdir -p "$VAULT/wiki" "$VAULT/chats/demo"
+VAULT_IGN="$VAULT"
 git init --quiet "$VAULT"
 printf 'chats/\n' >"$VAULT/.gitignore"
 printf 'digest\n' >"$VAULT/chats/demo/d1.md"
@@ -154,6 +155,7 @@ fi
 # value (wiki-ingest's draft template writes one). Absent status is valid.
 BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
 VAULT="$BOX/vault"
+VAULT_ENUM="$VAULT"
 mkdir -p "$VAULT/wiki"
 fm() { printf -- '---\nid: %s\ntags: [x]\n%b\n---\n# %s\n' "$1" "$2" "$1" >"$VAULT/wiki/$1.md"; }
 fm bad-conf 'confidence: high (decision); see linked note'
@@ -191,6 +193,98 @@ for n in ok-plain ok-status ok-comment ok-crlf; do
     pass "enum/clean-$n"
   fi
 done
+
+# --- 7. --json: the same findings as data (INNOV-362) -----------------------
+# /brain:verify and the dashboard consume findings as data. Contract:
+#   - --json prints ONE JSON array on stdout and writes no logs/ report
+#   - per kind, the count equals the Markdown section's count
+#   - low confidence is JSON-only (the Markdown has no such section)
+#   - --stdout output is unchanged by the flag's existence
+# jcount <file> <kind> → number of findings of that kind (node, no jq).
+jcount() {
+  node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+    if(!Array.isArray(a)) throw new Error("not an array");
+    process.stdout.write(String(a.filter(f=>f.kind===process.argv[2]).length));' "$1" "$2" 2>/dev/null || echo ERR
+}
+BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+VAULT="$BOX/vault"
+mkdir -p "$VAULT/wiki" "$VAULT/logs"
+# CRLF throughout: the vault is autocrlf.
+printf -- '---\r\nid: old-note\r\ntags: [x, y]\r\nlast_verified: 2020-01-01\r\nconfidence: low   # drafts start low\r\n---\r\n# Old\r\nSee [[new-note]] and [[Gone Target]].\r\n' >"$VAULT/wiki/old-note.md"
+printf -- '---\r\nid: new-note\r\ntags: [x, y]\r\nlast_verified: 2099-01-01\r\nconfidence: medium\r\n---\r\n# New\r\nSee [[old-note]].\r\n' >"$VAULT/wiki/new-note.md"
+(
+  cd "$BOX" || exit 99
+  BRAIN_ROOT="$VAULT" node "$FRESH" --json
+) >"$BOX/out.json" 2>"$BOX/err.txt"
+(
+  cd "$BOX" || exit 99
+  BRAIN_ROOT="$VAULT" node "$FRESH" --stdout
+) >"$BOX/out.md" 2>/dev/null
+
+if node -e 'JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"))' "$BOX/out.json" 2>/dev/null; then
+  pass "json/parses"
+else
+  fail "json/parses" "stdout is not JSON: [$(head -c 300 "$BOX/out.json")]" "stderr: [$(cat "$BOX/err.txt")]"
+fi
+if ls "$VAULT/logs/"freshness-*.md >/dev/null 2>&1; then
+  fail "json/no-report-file" "--json wrote a logs/ report: [$(ls "$VAULT/logs")]"
+else
+  pass "json/no-report-file"
+fi
+# kind | expected | Markdown section header that must agree
+for row in \
+  'dead-link|1|Dead `[[wikilinks]]` (1)' \
+  'stale|1|Stale notes (last_verified > 45d) (1)'; do
+  kind="${row%%|*}"; rest="${row#*|}"; want="${rest%%|*}"; header="${rest#*|}"
+  got="$(jcount "$BOX/out.json" "$kind")"
+  if [[ "$got" == "$want" ]] && grep -qF "$header" "$BOX/out.md"; then
+    pass "json/$kind-count-matches-markdown"
+  else
+    fail "json/$kind-count-matches-markdown" "json [$got] want [$want]; markdown header [$header] present? $(grep -cF "$header" "$BOX/out.md")"
+  fi
+done
+if node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  const d=a.find(f=>f.kind==="dead-link"), s=a.find(f=>f.kind==="stale"), l=a.find(f=>f.kind==="low-confidence");
+  const ok=d&&d.note==="wiki/old-note.md"&&d.target==="Gone Target"
+    &&s&&s.note==="wiki/old-note.md"&&s.date==="2020-01-01"&&typeof s.age==="number"
+    &&l&&l.note==="wiki/old-note.md";
+  process.exit(ok?0:1)' "$BOX/out.json" 2>/dev/null; then
+  pass "json/fields"
+else
+  fail "json/fields" "expected dead-link{note,target}, stale{note,date,age}, low-confidence{note} on wiki/old-note.md" "got: [$(cat "$BOX/out.json")]"
+fi
+# Negative controls: the fresh, medium-confidence note must yield nothing of
+# those kinds, and an absent kind must be zero — a dump of the wrong array
+# would pass the presence checks above.
+got="$(jcount "$BOX/out.json" low-confidence)"
+if [[ "$got" == "1" ]]; then pass "json/low-confidence-exactly-one"; else fail "json/low-confidence-exactly-one" "got [$got]"; fi
+if grep -qF 'wiki/new-note.md' "$BOX/out.json"; then
+  fail "json/clean-note-absent" "wiki/new-note.md appears in --json: [$(cat "$BOX/out.json")]"
+else
+  pass "json/clean-note-absent"
+fi
+got="$(jcount "$BOX/out.json" orphan)"
+if [[ "$got" == "0" ]]; then pass "json/orphan-zero"; else fail "json/orphan-zero" "got [$got]"; fi
+if grep -qiE 'low[- ]confidence' "$BOX/out.md"; then
+  fail "json/low-confidence-not-in-markdown" "the Markdown grew a low-confidence section"
+else
+  pass "json/low-confidence-not-in-markdown"
+fi
+
+# --- 8. --json covers every Markdown section on the earlier fixtures -------
+# The enum box: 4 bad-enum findings, same as the header asserted in 6.
+( cd "$TMPROOT" && BRAIN_ROOT="$VAULT_ENUM" node "$FRESH" --json ) >"$TMPROOT/enum.json" 2>/dev/null
+got="$(jcount "$TMPROOT/enum.json" bad-enum)"
+if [[ "$got" == "4" ]]; then pass "json/bad-enum-four"; else fail "json/bad-enum-four" "got [$got]"; fi
+# The gitignored-anchor box: one unverifiable-source with reason gitignored.
+( cd "$TMPROOT" && BRAIN_ROOT="$VAULT_IGN" node "$FRESH" --json ) >"$TMPROOT/ign.json" 2>/dev/null
+if node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  process.exit(a.some(f=>f.kind==="unverifiable-source"&&f.reason==="gitignored"&&f.source==="chats/demo/d1.md"&&f.note==="wiki/from-chat.md")?0:1)' \
+  "$TMPROOT/ign.json" 2>/dev/null; then
+  pass "json/unverifiable-gitignored"
+else
+  fail "json/unverifiable-gitignored" "got: [$(cat "$TMPROOT/ign.json")]"
+fi
 
 # ================================================================= SUMMARY ==
 echo

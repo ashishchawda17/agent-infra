@@ -24,6 +24,7 @@
 //   BRAIN_ROOT=<vault> node freshness.mjs                 # full report -> logs/freshness-<date>.md
 //   node freshness.mjs --vault <path> --stale-days 30
 //   node freshness.mjs --stdout                           # print instead of writing a file
+//   node freshness.mjs --json                             # findings as one JSON array on stdout; no file
 //   REPOS_DIR=~/code BRAIN_ROOT=<vault> node freshness.mjs # where covered repos live (default vault/..)
 //
 // Pure Node, no deps. Read-only except for the report file it writes.
@@ -46,6 +47,10 @@ const STALE_DAYS = Number(argVal('--stale-days')) || 45;
 // long-but-honest cache doesn't nag, while real accretion always trips it.
 const HOT_MAX_WORDS = Number(argVal('--hot-max-words')) || 750;
 const TO_STDOUT = argv.includes('--stdout');
+// --json (INNOV-362): the same findings as data, for /brain:verify and the
+// dashboard. Prints to stdout and writes no report file; the Markdown report is
+// built exactly as before, so the two cannot disagree on what was found.
+const TO_JSON = argv.includes('--json');
 
 if (!existsSync(join(VAULT, 'wiki'))) {
   console.error(`error: no wiki/ under '${VAULT}'. Set BRAIN_ROOT or pass --vault <path>.`);
@@ -149,6 +154,7 @@ const areaMismatchSources = [];
 const noFrontmatter = [];
 const noTags = [];
 const badEnums = [];
+const lowConfidence = []; // JSON-only: the Markdown report has no such section
 const tagCounts = new Map(); // tag → [note rel paths]
 
 for (const n of parsed) {
@@ -184,6 +190,7 @@ for (const n of parsed) {
     if (!(key in n.fm)) continue;
     const v = n.fm[key].replace(/\s+#.*$/, '');
     if (!allowed.includes(v)) badEnums.push({ from: rel, key, value: n.fm[key], allowed });
+    else if (key === 'confidence' && v === 'low') lowConfidence.push({ from: rel });
   }
 
   // 3. stale last_verified
@@ -528,7 +535,31 @@ L.push('---');
 L.push(total === 0 ? '✅ Clean — no issues found.' : `⚠️ ${total} item(s) to review.`);
 const report = L.join('\n') + '\n';
 
-if (TO_STDOUT) {
+if (TO_JSON) {
+  // One object per finding: `kind`, the vault-relative `note` where there is
+  // one, and the fields the Markdown line renders. Every Markdown section maps
+  // to a kind; `low-confidence` is the one kind with no Markdown section.
+  const relf = (f) => relative(VAULT, f).replace(/\\/g, '/');
+  const findings = [];
+  const add = (kind, list, fields) => { for (const x of list) findings.push({ kind, ...fields(x) }); };
+  add('dead-link', deadLinks, (d) => ({ note: d.from, target: d.target }));
+  add('orphan', orphans, (o) => ({ note: o }));
+  add('stale', stale, (s) => ({ note: s.from, date: s.date, age: s.age }));
+  add('broken-source', brokenSources, (b) => ({ note: b.from, source: b.source, looked: b.looked }));
+  add('wrong-repo-source', areaMismatchSources, (a) => ({ note: a.from, source: a.source, repo: a.repo, area: a.area }));
+  add('unverifiable-source', unverifiableSources, (u) => ({ note: u.from, source: u.source, repo: u.repo, reason: u.reason ?? 'no-checkout' }));
+  add('bad-enum', badEnums, (b) => ({ note: b.from, key: b.key, value: b.value, allowed: b.allowed }));
+  add('no-tags', noTags, (f) => ({ note: f }));
+  add('singleton-tag', singletons, ([t, ns]) => ({ note: ns[0], tag: t }));
+  add('no-frontmatter', noFrontmatter, (f) => ({ note: f }));
+  add('never-labeled-graph', noReportRepos, (g) => ({ repo: g.repo, count: g.count, why: g.why }));
+  add('generic-labels-graph', genericLabelRepos, (g) => ({ repo: g.repo, count: g.count }));
+  add('hot-over-budget', hotBloat, (h) => ({ note: 'wiki/hot.md', words: h.words, max: h.max }));
+  add('mirror-island', mirrorIslands, (c) => ({ files: c.length, sample: c.map(relf).slice(0, 3) }));
+  add('detached-cluster', detachedKnowledge, (c) => ({ files: c.length, notes: c.filter(isKnowledge).map(relf) }));
+  add('low-confidence', lowConfidence, (l) => ({ note: l.from }));
+  process.stdout.write(JSON.stringify(findings, null, 2) + '\n');
+} else if (TO_STDOUT) {
   process.stdout.write(report);
 } else {
   const out = join(VAULT, 'logs', `freshness-${date}.md`);
