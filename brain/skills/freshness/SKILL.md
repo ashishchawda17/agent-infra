@@ -39,7 +39,7 @@ Resolve the vault root as `$BRAIN_ROOT` (else the current project dir / cwd).
    - dead link → fix the link, create the missing note, or remove the reference?
    - broken source → the source moved/was deleted; re-anchor `source:` or re-verify the fact?
    - unverifiable source → **never** an edit to the note. Clone the repo or correct `REPOS_DIR`, then re-run.
-   - stale → re-verify against current code and bump `last_verified`, or the fact is still true (just bump)?
+   - stale / low confidence → `/brain:verify` re-checks the claim against current code in batch: bumps `last_verified` when it holds, sets `status:` when the code contradicts it.
    - orphan → add an `index.md` line / inbound link, or archive the note?
    - hot.md over budget → offer to prune it now: rewrite "Current focus" to what's actually current, drop prior-session bullets (history is in `logs/`), get it back under ~500 words.
 
@@ -59,5 +59,6 @@ Validate a scheduled run actually executed (not just "Ready"/exit 0): confirm a 
 - Read-only except the report file under `logs/`.
 - Tune `--stale-days` down as the wiki ages; 45 is deliberately loose so a young vault isn't all-stale.
 - To apply the mechanical subset of the queue (source re-anchors, orphan indexing, tag folds) as one reviewed batch, follow up with `/brain:tidy`.
+- To work the judgment subset (stale `last_verified`, low `confidence`, dead `[[wikilinks]]`) with agents, one PR per batch, follow up with `/brain:verify`. `freshness.mjs --json` prints the findings as data (one object per finding, plus a `low-confidence` kind the Markdown report does not show).
 - To clear the community-labeling findings (never-labeled / all-generic mirrors), follow up with `/brain:label [repo ...]`.
 - **The anchor verdict is shared, not duplicated.** `verified` / `broken` / `unverifiable` come from `brain/bin/anchors.mjs`, which `/brain:promote`'s gate (`bin/check-anchors.mjs`) also imports — so "does this anchor resolve?" cannot get two different answers depending on which command asked. To check anchors *before* a note becomes trusted rather than weeks later in a report, that is the gate to run.

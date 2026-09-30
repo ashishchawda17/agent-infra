@@ -53,7 +53,7 @@ Read the report and split every finding into **auto-fixable** vs **judgment** (b
 
 **Judgment (present, do NOT fix):**
 
-- Dead `[[wikilinks]]` (is the fact gone, or the note unwritten?), stale `last_verified` (needs re-verification against code), any broken source whose repo isn't cloned locally at all (the fix is a clone, not a rewrite), note deletion/archival of any kind, singleton tags with no clear canonical.
+- Dead `[[wikilinks]]` (is the fact gone, or the note unwritten?), stale `last_verified` (needs re-verification against code), low `confidence`: these three are `/brain:verify`'s queue, so point the user there. Also any broken source whose repo isn't cloned locally at all (the fix is a clone, not a rewrite), note deletion/archival of any kind, singleton tags with no clear canonical.
 
 ### 2b. Check for open PRs touching the same notes
 
