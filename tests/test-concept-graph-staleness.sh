@@ -438,6 +438,146 @@ assert_eq "deleted-negative-control/mutant-goes-green" "0" "$STATUS" \
 run_guard "$GUARD"
 assert_eq "deleted-negative-control/real-guard-STALE" "1" "$STATUS" "$(evidence "$BOX")"
 
+# --- 12. STALE names the count at the last save (INNOV-300) ------------------
+# A skip that becomes routine compounds: the skip line must show N AND what N
+# was at the previous save. "Last save" = the last commit touching logs/ (every
+# /brain:save commits its session log); M = notes changed graph..that commit.
+echo "--- 12. was M at last save ---"
+save_commit() { # dir slug — what a /brain:save commit looks like to git
+  mkdir -p "$1/logs"
+  printf '# %s\n' "$2" >"$1/logs/$2.md"
+  git_commit_all "$1" "save: $2"
+}
+
+# graph -> 5 notes -> save (skipped 5c) -> 3 notes => N=8, was 5
+new_vault
+add_notes "$VAULT" before 5
+save_commit "$VAULT" s1
+add_notes "$VAULT" after 3
+git_commit_all "$VAULT" "3 more notes"
+run_guard "$GUARD" CONCEPT_GRAPH_THRESHOLD=5
+assert_eq "last-save/exit-1" "1" "$STATUS" "$(evidence "$BOX")"
+assert_contains "last-save/names-8" "8 document(s) behind" "$(first_line "$BOX/err.txt")" \
+  "$(evidence "$BOX")"
+assert_contains "last-save/was-5" "was 5 at last save" "$(first_line "$BOX/err.txt")" \
+  "the compounding must be visible on the verdict line itself" "$(evidence "$BOX")"
+
+# CRLF variant: an autocrlf vault counts the same (the vault is autocrlf).
+BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+VAULT="$BOX/vault"
+mkdir -p "$VAULT/wiki" "$VAULT/graphify-out"
+printf '{"nodes":[]}\r\n' >"$VAULT/graphify-out/graph.json"
+git_init_commit "$VAULT" "crlf vault + graph"
+git -C "$VAULT" config core.autocrlf true
+i=1
+while [[ "$i" -le 4 ]]; do
+  printf '# crlf %d\r\nbody\r\n' "$i" >"$VAULT/wiki/crlf-$i.md"
+  i=$((i + 1))
+done
+save_commit "$VAULT" s1
+printf '# late\r\n' >"$VAULT/wiki/late.md"
+run_guard "$GUARD" CONCEPT_GRAPH_THRESHOLD=3
+assert_contains "last-save-crlf/was-4" "was 4 at last save" "$(first_line "$BOX/err.txt")" \
+  "$(evidence "$BOX")"
+
+# a save that refreshed 5c commits graph + log together => was 0
+new_vault
+printf '{"nodes":["rebuilt"]}\n' >"$VAULT/graphify-out/graph.json"
+save_commit "$VAULT" s1
+add_notes "$VAULT" after 30
+run_guard "$GUARD"
+assert_contains "last-save-refreshed/was-0" "was 0 at last save" \
+  "$(first_line "$BOX/err.txt")" "$(evidence "$BOX")"
+
+# graph rebuilt AFTER the last save => at that save the graph was older; the
+# count against the current graph is 0 (the clock was reset since).
+new_vault
+add_notes "$VAULT" before 5
+save_commit "$VAULT" s1
+printf '{"nodes":["rebuilt"]}\n' >"$VAULT/graphify-out/graph.json"
+git_commit_all "$VAULT" "rebuild graph"
+add_notes "$VAULT" after 30
+run_guard "$GUARD"
+assert_contains "graph-after-save/was-0" "was 0 at last save" \
+  "$(first_line "$BOX/err.txt")" "$(evidence "$BOX")"
+
+# never saved => says so, never invents a number
+new_vault
+add_notes "$VAULT" prior 30
+git_commit_all "$VAULT" "30 notes"
+run_guard "$GUARD"
+assert_contains "no-save/says-so" "no prior save" "$(first_line "$BOX/err.txt")" \
+  "$(evidence "$BOX")"
+
+# NEGATIVE CONTROL: measuring M up to HEAD instead of the save commit reports
+# today's number twice — the compounding disappears.
+MMUT="$TMPROOT/m-mutant-bin"
+mkdir -p "$MMUT"
+cp "$CWN" "$MMUT/changed-wiki-notes.sh"
+sed 's/^SAVE=.*/SAVE="$(git -C "$VAULT" rev-parse HEAD)"/' "$GUARD" >"$MMUT/check-concept-graph.sh"
+if cmp -s "$GUARD" "$MMUT/check-concept-graph.sh"; then
+  fail "m-negative-control/mutation-applied" "sed did not change the guard"
+else
+  pass "m-negative-control/mutation-applied"
+fi
+new_vault
+add_notes "$VAULT" before 5
+save_commit "$VAULT" s1
+add_notes "$VAULT" after 3
+git_commit_all "$VAULT" "3 more notes"
+run_guard "$MMUT/check-concept-graph.sh" CONCEPT_GRAPH_THRESHOLD=5
+assert_contains "m-negative-control/mutant-reports-8" "was 8 at last save" \
+  "$(first_line "$BOX/err.txt")" "$(evidence "$BOX")"
+
+# --- 13. STALE remedy text no longer says skipping is fine (INNOV-300) -------
+echo "--- 13. STALE remedy wording ---"
+new_vault
+add_notes "$VAULT" prior 30
+run_guard "$GUARD"
+if grep -q 'still allowed' "$BOX/err.txt"; then
+  fail "remedy/no-skip-is-fine" "STALE must not tell the saver skipping is fine" \
+    "$(evidence "$BOX")"
+else
+  pass "remedy/no-skip-is-fine"
+fi
+assert_contains "remedy/decline-needs-reason" "reason" "$(tr '\n' ' ' <"$BOX/err.txt")" \
+  "$(evidence "$BOX")"
+
+# --- 14. save step 5c contract (INNOV-300) ------------------------------------
+# The fixture for the 2026-09-14 incident: a PM's refresh hit graphify's shrink
+# guard, the skill said nothing, her agent proposed an already-ruled-out
+# workaround, and "skip 5c" became team policy. These are the sentences that
+# prevent each link of that chain; each fails against the pre-INNOV-300 text.
+echo "--- 14. save step 5c text ---"
+STEP5C="$(awk '/^5c\. /{on=1} /^6\. /{on=0} on' "$REPO_ROOT/brain/skills/save/SKILL.md" | tr -d '\r')"
+for want in \
+  'runs the refresh without asking' \
+  '5c SKIPPED (<reason>) — CONCEPT-GRAPH: STALE - N document(s) behind, was M at last save' \
+  'CONCEPT-GRAPH: BLOCKED - graphify not installed, run /brain:init' \
+  'refused to shrink' \
+  '`log.md`, `hot.md` and `index.md` each in its own chunk' \
+  'Never `--force`' \
+  'Do not propose any other workaround' \
+  'build_merge' \
+  'DETECT-NARROW:'; do
+  assert_contains "save-5c/has:$want" "$want" "$STEP5C" \
+    "brain/skills/save/SKILL.md step 5c must carry this sentence"
+done
+for gone in \
+  'Deliberately skipping the refresh stays allowed' \
+  'WARN only — it blocks nothing'; do
+  if [[ "$STEP5C" == *"$gone"* ]]; then
+    fail "save-5c/lacks:$gone" "step 5c still presents the refresh as optional"
+  else
+    pass "save-5c/lacks:$gone"
+  fi
+done
+OUTFMT="$(awk '/^## Output format/{on=1} /^## Notes/{on=0} on' "$REPO_ROOT/brain/skills/save/SKILL.md" | tr -d '\r')"
+assert_contains "save-output/BLOCKED-shape" "CONCEPT-GRAPH: BLOCKED" "$OUTFMT"
+assert_contains "save-output/SKIPPED-shape" "5c SKIPPED (" "$OUTFMT"
+assert_contains "readme/scenario-E-names-5c" "includes the wiki graph refresh" \
+  "$(grep '^| \*\*E ' "$REPO_ROOT/brain/README.md")"
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"

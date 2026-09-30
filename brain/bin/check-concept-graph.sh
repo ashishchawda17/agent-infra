@@ -17,9 +17,11 @@
 # manifest.json — INNOV-271 documents that list over-reporting hundreds of notes
 # when ten changed.
 #
-# WARN polarity, deliberately: exit 1 makes the staleness VISIBLE, it never
-# blocks anything. Deliberately skipping the rebuild stays allowed; the point is
-# that the skip line carries the number.
+# WARN polarity: exit 1 makes the staleness VISIBLE, it never blocks anything.
+# /brain:save step 5c answers STALE by running the refresh; a decline needs a
+# stated reason (INNOV-300). The STALE line also carries M, the count at the last
+# save (the last commit touching logs/), so a skip that became routine shows its
+# compounding: "N behind, was M at last save".
 #
 # The VAULT is resolved from $BRAIN_ROOT (this plugin's neutral contract var),
 # falling back to $CLAUDE_PROJECT_DIR then the current dir — the script lives in
@@ -41,7 +43,8 @@
 #              no graphify-out/graph.json, not a git repo, or graph.json exists
 #              but has never been committed (no last-built point to diff from —
 #              said outright rather than guessed at).
-#   exit 1  => first line "CONCEPT-GRAPH: STALE - N document(s) behind" (stderr).
+#   exit 1  => first line "CONCEPT-GRAPH: STALE - N document(s) behind, was M
+#              at last save" (stderr; "no prior save" when logs/ was never committed).
 #              WARN only: the caller relays the line; nothing is blocked.
 # Both OK and STALE carry the count and the threshold, so the trend is visible
 # before it becomes a violation (same stance as check-hot-budget.sh).
@@ -105,11 +108,28 @@ if [[ "$N" -le "$THRESHOLD" ]]; then
   exit 0
 fi
 
+# M: the same count as of the last save — the last commit touching logs/, which
+# every /brain:save makes. A graph committed at or after that save means the
+# clock was reset since, so M is 0. Committed history only: one diff, adds,
+# modifies, renames (new path) and deletions each one entry, as N counts them.
+SAVE="$(git -C "$VAULT" log -1 --format=%H -- logs 2>/dev/null | tr -d '[:space:]')"
+if [[ -z "$SAVE" ]]; then
+  WAS="no prior save"
+elif git -C "$VAULT" merge-base --is-ancestor "$SAVE" "$LAST" 2>/dev/null; then
+  WAS="was 0 at last save"
+else
+  PREFIX="$(git -C "$VAULT" rev-parse --show-prefix 2>/dev/null)"
+  M="$(git -C "$VAULT" -c core.quotepath=false diff --name-only -M "$LAST" "$SAVE" -- wiki 2>/dev/null \
+    | grep -c "^${PREFIX}wiki/.*\.md$" | tr -d '[:space:]')"
+  WAS="was ${M:-0} at last save"
+fi
+
 {
-  echo "CONCEPT-GRAPH: STALE - $N document(s) behind (threshold $THRESHOLD); wiki graph last committed at ${LAST:0:12}"
+  echo "CONCEPT-GRAPH: STALE - $N document(s) behind, $WAS (threshold $THRESHOLD); wiki graph last committed at ${LAST:0:12}"
   echo "  $N wiki note(s) were added/modified/deleted since the concept graph was last built,"
   echo "  across ALL sessions — the session-changed list alone cannot see this."
-  echo "  WARN only: skipping the refresh is still allowed, but say so with this line."
+  echo "  /brain:save runs the refresh on this verdict; declining needs a stated reason,"
+  echo "  recorded with this line."
   echo "  Remedy: run /brain:save step 5c's graphify refresh (skill, wiki --update),"
   echo "  then commit graphify-out/, and re-run:"
   echo "    BRAIN_ROOT=\"$VAULT\" bash check-concept-graph.sh"
