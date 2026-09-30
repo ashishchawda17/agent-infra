@@ -16,8 +16,9 @@
 // reminder on every Grep/Bash call is noise, not enforcement.
 //
 // STALENESS-AWARE: the reminder reports the graph's built_at_commit vs the
-// repo's current HEAD, so the agent can see whether graph answers are
-// authoritative (fresh) or advisory (stale).
+// repo's current HEAD, so the agent can see whether graph answers lead (fresh)
+// or are advisory (stale). Even fresh, a caller list is only a minimum: graphify
+// does not resolve types (INNOV-356).
 //
 // Registered via this plugin's hooks/hooks.json (matcher "Grep|Bash"). The
 // `graphify-out/graph.json` presence test is the frozen detection contract that
@@ -121,7 +122,7 @@ let freshness;
 if (builtAt && head) {
   freshness =
     builtAt === head
-      ? `Graph is FRESH (built at HEAD ${short(head)}) — treat graph answers as authoritative for committed structure.`
+      ? `Graph is FRESH (built at HEAD ${short(head)}) — trust it for where committed symbols are defined.`
       : `Graph is STALE (built at ${short(builtAt)}, HEAD is ${short(head)}) — treat graph answers as advisory hints and verify against source.`;
 } else {
   freshness = 'Graph freshness unknown — treat graph answers as advisory.';
@@ -134,10 +135,12 @@ else if (existsSync(join(cwd, 'graphify-out/brain-inputs.json'))) freshness = `G
 
 const reminder =
   `graph-before-grep (once per session): this repo has a graphify graph. ${freshness} ` +
-  'For structural questions ("where does X live", "what calls Y", blast radius) run ' +
-  '`graphify query "<question>"` before sweeping raw source — graph-first when fresh, ' +
-  'advisory otherwise. Raw search is fine when the graph comes up empty or to read a ' +
-  'file you are about to edit. (Non-blocking.)';
+  'For structural questions run `graphify explain "<Symbol>"` or `graphify affected "<Symbol>"` ' +
+  'with the exact name (`graphify query "<question>"` only when you lack the name) before ' +
+  'sweeping raw source — graph-first when fresh, advisory otherwise. Caller and usage lists ' +
+  'are a minimum (calls through fields, cross-language calls and XML are missed): confirm ' +
+  'blast radius with raw search. No result naming your symbol means it is not in the graph: ' +
+  'search raw. (Non-blocking.)';
 
 process.stdout.write(
   JSON.stringify({
