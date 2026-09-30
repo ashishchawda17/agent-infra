@@ -46,27 +46,36 @@ F="$(mktemp)"
 node "${CLAUDE_PLUGIN_ROOT}/bin/freshness.mjs" --json > "$F"   # writes no logs/ report
 ```
 
-Keep only the three judgment kinds. Drop `wiki/_drafts/` notes from `stale` and `low-confidence`, and drop notes already marked `status: superseded` or `falsified` (they already say what is wrong). Group by note: a note that is both stale and low-confidence gets **one** check, not two. Order: dead links first (cheapest), then stale notes oldest first, then low-confidence. Take the first `--max` findings. Use `node -e`, not `jq`, which is not assumed:
+Keep only the three judgment kinds. Drop every finding in a `wiki/_drafts/` note (drafts are `/brain:promote`'s queue), and drop notes already marked `status: superseded` or `falsified` (they already say what is wrong). Group by note: a note that is both stale and low-confidence becomes **one** `claim` item with one check, not two. Order: dead links first (cheapest), then claims, stale oldest first, low-confidence-only last. Take the first `--max` items. This selector is the queue definition: step 5's re-check runs it again. Use `node -e`, not `jq`, which is not assumed:
 
 ```bash
+MAX=25   # the --max argument, when given
 node -e '
   const fs = require("fs"), path = require("path");
-  const a = JSON.parse(fs.readFileSync(process.argv[1], "utf8"));
-  const frontmatter = (n) => fs.readFileSync(path.join(process.argv[3], n), "utf8").split("---")[1] || "";
+  const [, file, max, vault] = process.argv;
+  const a = JSON.parse(fs.readFileSync(file, "utf8"));
+  const frontmatter = (n) => fs.readFileSync(path.join(vault, n), "utf8").split("---")[1] || "";
   const marked = (n) => /^status: *(superseded|falsified)/m.test(frontmatter(n));
-  const skip = (n) => n.startsWith("wiki/_drafts/") || marked(n);
-  const dead = a.filter((f) => f.kind === "dead-link");
-  const stale = a.filter((f) => f.kind === "stale" && !skip(f.note)).sort((x, y) => y.age - x.age);
-  const low = a.filter((f) => f.kind === "low-confidence" && !skip(f.note));
-  for (const f of [...dead, ...stale, ...low].slice(0, Number(process.argv[2]) || 25)) console.log(JSON.stringify(f));
-' "$F" 25 "${BRAIN_ROOT:-$PWD}"
+  const draft = (n) => n.startsWith("wiki/_drafts/");
+  const dead = a.filter((f) => f.kind === "dead-link" && !draft(f.note));
+  const claims = new Map();
+  for (const f of a) {
+    if ((f.kind !== "stale" && f.kind !== "low-confidence") || draft(f.note) || marked(f.note)) continue;
+    const c = claims.get(f.note) || { kind: "claim", note: f.note, stale: null, low: false };
+    if (f.kind === "stale") c.stale = { date: f.date, age: f.age }; else c.low = true;
+    claims.set(f.note, c);
+  }
+  const age = (c) => (c.stale ? c.stale.age : -1);
+  const queue = [...dead, ...[...claims.values()].sort((x, y) => age(y) - age(x))];
+  for (const f of queue.slice(0, Number(max) || 25)) console.log(JSON.stringify(f));
+' "$F" "$MAX" "${BRAIN_ROOT:-$PWD}"
 ```
 
 Nothing left → report "judgment queue empty", close the session (step 7), stop.
 
 ### 2. Resolve anchors first; skip what cannot resolve
 
-For every stale or low-confidence note, run the shared anchor gate:
+For every `claim` item, run the shared anchor gate:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/bin/check-anchors.mjs" <note.md> [...]
@@ -92,8 +101,8 @@ A note an open PR already edits is dropped from this batch and listed as blocked
 
 Subagents are **read-only**: they return a verdict and never edit a file. This session applies every write (step 5), so the vault and its git index have exactly one writer. Dispatch in parallel. Each gets the note's path, its `source:` anchor, the resolved checkout and reference branch, and one of these briefs:
 
-- **Stale / low-confidence note:** "Read the note. Read the anchored code on `origin/<branch>` with `git show` / `git grep`. Decide whether each factual claim the note makes still holds. Return exactly one JSON object: `{\"note\": \"...\", \"verdict\": \"holds\" | \"superseded\" | \"falsified\" | \"cannot-tell\", \"reason\": \"<one line citing file:line on origin/<branch>>\"}`. `holds` only if every claim holds. `superseded` means the code once said this and has since changed. `falsified` means the code does not and did not say this. `cannot-tell` means the code does not settle it either way. When in doubt, answer `cannot-tell`."
-- **Dead link:** "Note `<note>` links `[[<target>]]`, which resolves to nothing. Search `wiki/**/*.md` (including `wiki/_drafts/`) for a note that is plainly the same subject under another name: a renamed basename, an `aliases:` entry, a heading, an `id:`. Return `{\"note\": \"...\", \"target\": \"...\", \"verdict\": \"found\" | \"none\", \"replacement\": \"<basename>\", \"reason\": \"<one line>\"}`. Only `found` with one unambiguous candidate. Two plausible candidates is `none`."
+- **Claim (stale and/or low-confidence note):** "Read the note. Read the anchored code on `origin/<branch>` with `git show` / `git grep`. Decide whether each factual claim the note makes still holds. Return exactly one JSON object: `{\"note\": \"...\", \"verdict\": \"holds\" | \"superseded\" | \"falsified\" | \"cannot-tell\", \"reason\": \"<one line citing file:line on origin/<branch>>\"}`. `holds` only if every claim holds. `superseded` means the code once said this and has since changed. `falsified` means the code does not and did not say this. `cannot-tell` means the code does not settle it either way. When in doubt, answer `cannot-tell`."
+- **Dead link:** "Note `<note>` links `[[<target>]]`, which resolves to nothing. Search `wiki/**/*.md` (including `wiki/_drafts/`) for a note that is plainly the same subject under another name: a renamed basename, an `aliases:` entry, a heading, an `id:`. Return `{\"note\": \"...\", \"target\": \"...\", \"verdict\": \"found\" | \"draft\" | \"none\", \"replacement\": \"<basename>\", \"reason\": \"<one line>\"}`. `found` only for one unambiguous candidate outside `wiki/_drafts/`. `draft` when the one unambiguous candidate is a draft. Two plausible candidates is `none`."
 
 ### 5. Show the plan, then apply
 
@@ -101,27 +110,36 @@ Show the full plan compactly as the four-part table (step 6's format) plus block
 
 | Verdict | Edit | Nothing else changes |
 | --- | --- | --- |
-| `holds` (stale) | `last_verified:` → today (`date +%F`) | body, `confidence`, `status` |
-| `holds` (low-confidence) | `confidence: low` → `medium`, and `last_verified:` → today | body, `status` |
+| `holds`, note has `confidence: medium`/`high` | `last_verified:` → today (`date +%F`) | body, `confidence`, `status` |
+| `holds`, note has `confidence: low` | `confidence: low` → `medium`, and `last_verified:` → today | body, `status` |
 | `superseded` / `falsified` | add or set `status: <verdict>`. Insert **one line** immediately after the closing `---`: `> **Status (<today>, /brain:verify):** <verdict>: <reason>` | `last_verified` (**not** bumped: the note was not confirmed), `confidence`, the rest of the body |
 | `cannot-tell` | none. List it | everything |
 | dead link `found` | rewrite `[[<target>` → `[[<replacement>` in that note (keep any `\|alias` / `#heading`) | everything else |
+| dead link `draft` | none. List it as "target exists only as draft `<replacement>`; promote it first". A trusted note never links staging | everything |
 | dead link `none` | none. List it | everything |
 
-Preserve each file's line endings (vault notes are often CRLF) and any trailing YAML comment on an edited line. Then **re-run the scan** (`freshness.mjs --json`): the fixed findings must be gone, and no new dead link may appear. A typo'd replacement creates one, so fix it before shipping.
+Preserve each file's line endings (vault notes are often CRLF) and any trailing YAML comment on an edited line. Then **re-run step 1** (scan plus selector, not the raw scan). Every note you bumped, status-marked or relinked must be gone from the queue: status-marked notes are still `stale` in the raw `--json`, and the selector is what drops them. Only could-not-tell items may remain, and the raw `--json` may show no dead link that was not there before (a typo'd replacement creates one). Fix before shipping.
 
 ### 6. Commit and open one PR
 
-Confirm HEAD is still the branch on step 0's `pin:` line (`git rev-parse --abbrev-ref HEAD`). If it moved, **stop**: another session switched the checkout, and committing here lands on a branch you never chose. Then stage **only** the notes you edited, and check the index holds nothing else (it is shared with every session in this checkout):
+Trusted notes are outside `.saveinclude`, so `vault-commit.sh` would refuse this commit. This block applies the same guards itself. Run it **in the vault**, as one script, and stop on the first `VERIFY: REFUSED`:
 
 ```bash
+cd "${BRAIN_ROOT:-$PWD}" || exit 1                  # every git/gh command below acts on the vault
+PIN="<branch>:<sha>"                                # step 0's pin: line, verbatim
+BRANCH="${PIN%%:*}"
+[ "$(git rev-parse --abbrev-ref HEAD):$(git rev-parse HEAD)" = "$PIN" ] ||
+  { echo "VERIFY: REFUSED - HEAD moved since session.sh --start (branch switched, or another session committed here)"; exit 1; }
+[ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number' 2>/dev/null)" ] ||
+  { echo "VERIFY: REFUSED - '$BRANCH' already has an open PR; do not pile onto it"; exit 1; }
+[ -z "$(git diff --cached --name-only)" ] ||
+  { echo "VERIFY: REFUSED - the shared index already holds staged paths:"; git diff --cached --name-only; exit 1; }
 git add -- <each edited note>
-git diff --cached --name-only        # must list exactly those notes, and nothing more
 git commit -m "verify: <V> verified, <C> status set, <L> links fixed (<date>)"
 git push -u origin HEAD && gh pr create --title "brain:verify <date>" --body-file <body.md>
 ```
 
-Anything else staged → unstage your notes, stop, and report the stray paths. Never commit someone else's staged work.
+A moved HEAD means another session switched the checkout or committed onto this branch, and pushing would publish its work under this PR. A refusal leaves your edits in the working tree, uncommitted. Report it, and never commit someone else's staged work.
 
 The PR body carries one table in four parts. The **could-not-tell** part is the one a person must read:
 
