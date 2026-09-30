@@ -18,7 +18,10 @@
 // THE MODEL: the vault stores IDENTITY; each machine stores LOCATION.
 //
 //   repos.json        committed, machine-independent, zero local paths:
-//                       { "repos": { "<name>": { "remote": "...", "subPath": "..." } } }
+//                       { "repos": { "<name>": { "remote": "...", "subPath": "...", "branch": "..." } } }
+//                     `branch` is optional: the ONE long-running branch a shared
+//                     graph mirror of this repo must be built from (INNOV-353).
+//                     Absent, the repo's detected default branch is used.
 //   repos.local.json  gitignored, generated, per-repo absolute paths:
 //                       { "<name>": "/abs/path/to/checkout[/subPath]" }
 //
@@ -58,6 +61,17 @@ function readJson(file) {
   } catch {
     return null; // a corrupt cache must never be fatal — we just re-detect
   }
+}
+
+/**
+ * The reference branch a repos.json entry configures, or '' when it sets none.
+ * Anything that is not a plain ref-safe name reads as "not configured" — the
+ * caller then falls back to the detected default and says so, which is a louder
+ * failure than checking against a branch name nobody can have meant.
+ */
+export function branchOf(spec) {
+  const b = typeof spec?.branch === 'string' ? spec.branch.trim() : '';
+  return /^[A-Za-z0-9._/-]+$/.test(b) && !b.startsWith('-') ? b : '';
 }
 
 /** Let Git resolve linked-worktree metadata and the specific origin remote. */
@@ -145,7 +159,7 @@ export function resolveRepos(vault, searchRoots = []) {
       const root = sub ? cached.slice(0, cached.length - sub.length - 1) : cached;
       if (!want || remoteOf(root) === want) {
         paths.set(name, cached);
-        meta.set(name, { root, subPath: sub });
+        meta.set(name, { root, subPath: sub, branch: branchOf(spec) });
         continue;
       }
     }
@@ -164,7 +178,7 @@ export function resolveRepos(vault, searchRoots = []) {
       continue;
     }
     paths.set(name, full);
-    meta.set(name, { root, subPath: sub });
+    meta.set(name, { root, subPath: sub, branch: branchOf(spec) });
     if (cache[name] !== full) { cache[name] = full; cacheChanged = true; }
   }
 
@@ -261,6 +275,23 @@ if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith
     for (const [name, p] of r.paths) {
       if (name.includes('\t') || name.includes('\n')) continue; // never emit a line that cannot be parsed
       console.log(`${name}\t${String(p).replace(/\\/g, '/')}`);
+    }
+    process.exit(0);
+  }
+
+  // --print-branches: `name<TAB>branch`, one line per repos.json entry that
+  // CONFIGURES a reference branch (INNOV-353). A separate mode rather than a
+  // third --print-paths column, because every --print-paths reader does
+  // `read -r name path` and would fold the extra column into the path. It reads
+  // identity only, never location: a repo this machine cannot resolve still has a
+  // configured branch, and a caller handed its checkout explicitly must not fall
+  // back to the detected default for it.
+  if (argv.includes('--print-branches')) {
+    const repos = readJson(join(vault, 'repos.json'))?.repos || {};
+    for (const [name, spec] of Object.entries(repos)) {
+      const branch = branchOf(spec);
+      if (!branch || name.includes('\t') || name.includes('\n')) continue;
+      console.log(`${name}\t${branch}`);
     }
     process.exit(0);
   }
