@@ -46,14 +46,14 @@ bin/harvest-chats.mjs   →  chats/<repo>/*.md (status: raw)
    id: <area-kebab-slug>
    tags: [<cross-cutting>, <topic>]   # reuse existing tags (see CLAUDE.md vocab), don't coin singletons
    digest: chats/<repo>/<digest>.md  # the session it came from — provenance, never an anchor
-   source: <repo/file#anchor, PR, or commit the fact is about>  # only if verified below; else omit the line
+   source: <repo/file#anchor or commit the fact is about>  # only if verified below; else omit the line
    owner: <github-handle>
    last_verified: <today>
    confidence: low      # drafts start low; review bumps it
    draft: true
    ---
    ```
-   **`digest:` vs `source:`.** The transcript goes in `digest:`. `chats/` is git-ignored, so it resolves only on the machine that ran the harvest, and a digest is a lossy summary rather than the fact itself. Never point `source:` at a `chats/` path. Write `source:` only when the digest names the tracked file, PR or commit the fact is about. Then check that draft by itself:
+   **`digest:` vs `source:`.** The transcript goes in `digest:`. `chats/` is git-ignored, so it resolves only on the machine that ran the harvest, and a digest is a lossy summary rather than the fact itself. Never point `source:` at a `chats/` path. Write `source:` only when the digest names the tracked repo file or commit the fact is about. A PR or URL cannot be verified on this machine, so leave it for `/brain:promote` to supply. Then check that draft by itself:
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/bin/check-anchors.mjs" wiki/_drafts/<new-draft>.md   # from the vault root, or with BRAIN_ROOT=<vault> set
    ```
