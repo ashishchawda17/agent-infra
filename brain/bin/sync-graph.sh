@@ -62,6 +62,14 @@
 # The rule the audit enforces is the one the vault records, so it is finally a
 # mechanism rather than a paragraph — everything enforced by prose drifts.
 #
+# PROVENANCE (INNOV-353): before a mirror is published, the `built_at_commit` its
+# graph.json carries must be an ancestor of origin/<reference branch> in the
+# source checkout. The reference branch is `branch` in the vault's repos.json,
+# else the checkout's detected default. A graph built off that branch — a feature
+# branch, merged or not — REFUSES that mirror's copy and makes the run exit 1;
+# other mirrors still sync. Building is never blocked, only publishing. When the
+# check cannot run it reports SKIPPED with the reason and the mirror publishes.
+#
 # COMMITTING IS NOT THIS SCRIPT'S JOB (INNOV-275). Every guard that used to live
 # here — open-PR, protected branch, HEAD pin — now lives in bin/vault-commit.sh,
 # the single commit path shared with /brain:save. This script captures the HEAD
@@ -387,6 +395,103 @@ scope_audit() { # graph_path repo_root name
   return 0
 }
 
+# --- THE PROVENANCE GATE (INNOV-353) ----------------------------------------
+#
+# A shared mirror used to reflect whichever commit the last person to sync had
+# checked out. One team vault held a mirror 1,429 commits behind its trunk and
+# another built from a feature branch, and both passed every check above: the
+# staleness test says "differs", never "newer" or "from the right branch", and
+# the scope audit looks at which files are in the graph, not which commit.
+#
+# The rule: `built_at_commit` must be an ancestor of origin/<reference branch>.
+# ONE long-running branch per repo, because "built from the agreed branch" only
+# means something against one line of history. A commit AHEAD of that branch is
+# refused too — unmerged code does not belong in the shared graph — and so is a
+# branch that was later SQUASH-merged: its commits never enter the reference
+# branch's history, so from the graph alone it is indistinguishable from a branch
+# abandoned a year ago. Rebuilding from the reference branch is the only way to
+# get a mirror anyone can verify.
+#
+# Same polarity as the scope gate, for the same reason: a positive finding
+# REFUSES, "could not check" is SKIPPED, says why, and publishes. Every graph
+# built before graphify stamped the commit is unverifiable, and refusing those
+# would break working vaults over a rule they were never able to meet.
+#
+# Nothing here fetches or moves the source checkout. The ref is whatever the
+# checkout last fetched: a commit on the reference branch is one the checkout got
+# BY fetching it, so a stale ref can only ever err towards SKIPPED or REFUSED.
+# shellcheck source=lib/branch.sh
+source "$SCRIPT_DIR/lib/branch.sh"
+
+# repos.json's configured reference branches. Parallel arrays, as the alias map.
+REPO_BRANCH_NAMES=()
+REPO_BRANCH_REFS=()
+if command -v node >/dev/null 2>&1 && [[ -f "$SCRIPT_DIR/resolve-repos.mjs" ]]; then
+  while IFS=$'\t' read -r _branch_name _branch_ref; do
+    _branch_ref="${_branch_ref%$'\r'}"
+    [[ -n "$_branch_name" && -n "$_branch_ref" ]] || continue
+    REPO_BRANCH_NAMES+=("$_branch_name")
+    REPO_BRANCH_REFS+=("$_branch_ref")
+  done < <(node "$SCRIPT_DIR/resolve-repos.mjs" --vault "$VAULT" --print-branches 2>/dev/null || true)
+fi
+
+# Checks one mirror. Sets PROV_VERDICT (OK | REFUSED | SKIPPED) and PROV_DETAIL:
+# for OK and REFUSED "<commit> <branch> <how the branch was chosen>", for SKIPPED
+# the reason. Always returns 0 so `set -e` cannot turn a report into an abort.
+provenance_check() { # graph_path repo_path mirror_name
+  local graph="$1" repo="$2" nm="$3" sha="" branch="" how="" rc=0 i=0
+  PROV_VERDICT="SKIPPED"
+  # The ROOT property only, so a real JSON parse: a textual match would also find
+  # a node attribute of the same name, and pass or refuse on the wrong commit.
+  sha="$(node -e 'const v = JSON.parse(require("fs").readFileSync(process.argv[1], "utf8")).built_at_commit;
+    if (typeof v === "string") process.stdout.write(v);' "$graph" 2>/dev/null)" || rc=$?
+  if [[ $rc -ne 0 ]]; then
+    PROV_DETAIL="graph.json could not be read for its built_at_commit (node, or the file itself)"; return 0
+  fi
+  if [[ -z "$sha" ]]; then
+    PROV_DETAIL="graph.json carries no built_at_commit (rebuild it with a current graphify)"; return 0
+  fi
+  if [[ ! "$sha" =~ ^[0-9a-fA-F]{7,40}$ ]]; then
+    PROV_DETAIL="built_at_commit '$sha' is not a commit id"; return 0
+  fi
+  if ! git -C "$repo" rev-parse --git-dir >/dev/null 2>&1; then
+    PROV_DETAIL="$repo is not a git checkout"; return 0
+  fi
+  while [[ $i -lt ${#REPO_BRANCH_NAMES[@]} ]]; do
+    if [[ "${REPO_BRANCH_NAMES[$i]}" == "$nm" ]]; then branch="${REPO_BRANCH_REFS[$i]}"; fi
+    i=$((i + 1))
+  done
+  if [[ -n "$branch" ]]; then
+    how="configured in repos.json"
+  else
+    # detect_default_branch reads $VAULT; here the repo in question is the SOURCE.
+    branch="$(VAULT="$repo" detect_default_branch)"
+    how="the detected default, not configured - set \"branch\" for $nm in repos.json if that is the wrong branch"
+  fi
+  if [[ -z "$branch" ]]; then
+    PROV_DETAIL="no reference branch: repos.json sets no \"branch\" for $nm and the checkout's default could not be detected"; return 0
+  fi
+  if ! git -C "$repo" rev-parse --verify --quiet "refs/remotes/origin/$branch^{commit}" >/dev/null 2>&1; then
+    PROV_DETAIL="the checkout has no origin/$branch ($how) - fetch it, or correct the branch"; return 0
+  fi
+  if ! git -C "$repo" rev-parse --verify --quiet "$sha^{commit}" >/dev/null 2>&1; then
+    PROV_DETAIL="built_at_commit ${sha:0:12} is not in this checkout, so it cannot be compared to origin/$branch ($how)"; return 0
+  fi
+  git -C "$repo" merge-base --is-ancestor "$sha" "refs/remotes/origin/$branch" >/dev/null 2>&1 || rc=$?
+  PROV_DETAIL="${sha:0:12} $branch $how"
+  if [[ $rc -eq 0 ]]; then
+    PROV_VERDICT="OK"
+  elif [[ $rc -ne 1 ]]; then
+    PROV_DETAIL="git could not compare ${sha:0:12} to origin/$branch ($how)"
+  elif [[ "$(git -C "$repo" rev-parse --is-shallow-repository 2>/dev/null || true)" == "true" ]]; then
+    # History is cut, so "not an ancestor" proves nothing here.
+    PROV_DETAIL="the checkout is a shallow clone, so ${sha:0:12} cannot be placed on origin/$branch ($how)"
+  else
+    PROV_VERDICT="REFUSED"
+  fi
+  return 0
+}
+
 # True when the repo-side graph at $1 exists and differs from the mirrored copy
 # at $2 — the same `cmp -s` test the sync loop uses to decide "up-to-date".
 mirror_is_stale() {
@@ -434,6 +539,7 @@ fi
 
 synced=()
 refused=()
+off_branch=()
 for repo in "${repos[@]}"; do
   # The mirror this checkout publishes to. basename is right whenever the folder
   # name IS the canonical name; the alias map is what makes monorepo/frontend publish
@@ -450,6 +556,34 @@ for repo in "${repos[@]}"; do
     echo "up-to-date: $name"
     continue
   fi
+
+  # THE PROVENANCE GATE. Ahead of the scope gate because it is the cheaper of the
+  # two, and like it runs BEFORE the first copy: a refusal leaves the vault with
+  # the mirror it already had. No finding is queued — a graph built on the wrong
+  # branch is the operator's to rebuild, not a plugin defect to ticket.
+  provenance_check "$src/graph.json" "$repo" "$name"
+  case "$PROV_VERDICT" in
+    REFUSED)
+      read -r prov_sha prov_branch prov_how <<<"$PROV_DETAIL"
+      {
+        echo "REFUSED $name: its graph was built at $prov_sha, which is not on origin/$prov_branch ($prov_how), so it was NOT published."
+        echo "  A shared mirror has to come from the reference branch. A commit ahead of it is unmerged"
+        echo "  work; a branch that was squash-merged never enters its history, so neither can be verified."
+        echo "  Nothing was copied for $name and no log line was written; the vault keeps the mirror it"
+        echo "  already had. In $repo: check out $prov_branch, pull, rebuild the graph, then re-run this"
+        echo "  sync. Your local graph still serves the hook in that checkout either way."
+      } >&2
+      off_branch+=("$name")
+      continue
+      ;;
+    OK)
+      read -r prov_sha prov_branch prov_how <<<"$PROV_DETAIL"
+      echo "PROVENANCE: OK $name - built at $prov_sha, on origin/$prov_branch ($prov_how)" >&2
+      ;;
+    *)
+      echo "PROVENANCE: SKIPPED $name - $PROV_DETAIL. Publishing anyway, unverified: this is NOT a clean check." >&2
+      ;;
+  esac
 
   # THE SCOPE GATE. Runs BEFORE the first copy, so a refusal leaves the vault
   # exactly as it found it — the mirror it already had is still the mirror it
@@ -718,5 +852,10 @@ fi
 # /brain:save report a successful sync over a mirror that was never written.
 if [[ ${#refused[@]} -gt 0 ]]; then
   echo "scope audit REFUSED ${#refused[@]} mirror(s): ${refused[*]} (see the reports above)" >&2
+fi
+if [[ ${#off_branch[@]} -gt 0 ]]; then
+  echo "provenance check REFUSED ${#off_branch[@]} mirror(s): ${off_branch[*]} (built off the reference branch; see above)" >&2
+fi
+if [[ ${#refused[@]} -gt 0 || ${#off_branch[@]} -gt 0 ]]; then
   exit 1
 fi
