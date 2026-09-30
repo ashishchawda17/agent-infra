@@ -25,6 +25,8 @@
 #   BRAIN_ROOT=<vault> bash vault-commit.sh -m "msg" --pin "main:abc123" # verify HEAD hasn't moved
 #   BRAIN_ROOT=<vault> bash vault-commit.sh -m "msg" --force-commit      # commit onto a branch with an open PR
 #   BRAIN_ROOT=<vault> bash vault-commit.sh --print-allowlist            # what would be staged, one per line
+#   BRAIN_ROOT=<vault> bash vault-commit.sh -m "msg" --pin "br:sha" --pr-paths wiki/a/x.md wiki/index.md
+#                                                                         # PR-bound commit of named paths
 #
 #   -m, --message MSG   commit message (required unless --print-allowlist)
 #   --pin BRANCH:SHA    the vault's branch + SHA as the CALLER saw them at start.
@@ -32,6 +34,9 @@
 #   --force-commit      overrides the OPEN-PR guard ONLY. It does NOT override the
 #                       protected-branch guard or the HEAD pin — see below.
 #   --print-allowlist   print THIS VAULT's resolved allowlist entries and exit 0.
+#   --pr-paths          the path arguments are paths OUTSIDE the allowlist, named
+#                       one by one, for a commit that ships as a PR. See
+#                       "PR-BOUND COMMITS" below. Requires --pin.
 #   --print-required    print the paths shipped brain commands commit, TSV
 #                       "<path>\t<which command needs it>", and exit 0. Needs no
 #                       vault — it is a property of the plugin, not of a vault.
@@ -100,6 +105,23 @@
 # means "I know about the open PR and want it anyway", but a moved HEAD makes the
 # caller's intent genuinely unknown — there is nothing to force.
 #
+# PR-BOUND COMMITS (--pr-paths, INNOV-363). Trusted notes (wiki/<area>/*.md) are
+# off .saveinclude by design: they reach the vault's default branch only through
+# a reviewed PR. /brain:promote, /brain:tidy and /brain:verify commit them onto a
+# working branch for that PR, and before this mode they did it with raw git and
+# re-implemented the guards in prose — the INNOV-274 shape again. --pr-paths
+# swaps the allowlist for the caller's explicit list and keeps every other guard:
+#   - --pin is REQUIRED, and the protected-branch guard applies unchanged. Neither
+#     has an override; the open-PR guard is exactly as above.
+#   - the index must be EMPTY before anything is staged: the commit carries what
+#     the caller named and nothing another session left in the shared index.
+#   - each named path must be one literal FILE (no glob, no directory), inside
+#     the vault, not under chats/, not gitignored (tracked or not), and either
+#     present or tracked, so a named deletion (a dropped or moved draft) stages.
+#   - after staging, every path in the index must be one of the named paths.
+#   - named paths with no change REFUSE (exit 1), unlike the default mode's
+#     "nothing to commit" exit 0: the caller is about to open a PR for them.
+#
 # NOTHING IS STAGED ON A REFUSAL. Every guard runs BEFORE the first `git add`, so
 # a refusal leaves the index exactly as it found it. The older sync-graph.sh
 # behaviour — stage, then refuse, and tell the user it was "left staged" — is
@@ -124,6 +146,7 @@ BIN_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 MESSAGE=""
 unset PIN   # unset = no --pin; set-but-empty (--pin "") is malformed, never "unpinned"
 FORCE_COMMIT=0
+PR_MODE=0
 PRINT_ALLOWLIST=0
 PRINT_REQUIRED=0
 PATHS=()
@@ -164,6 +187,7 @@ while [[ $# -gt 0 ]]; do
     --pin)             PIN="${2:-}"; shift 2 || refuse "--pin needs a value" ;;
     --pin=*)           PIN="${1#*=}"; shift ;;
     --force-commit)    FORCE_COMMIT=1; shift ;;
+    --pr-paths)        PR_MODE=1; shift ;;
     --print-allowlist) PRINT_ALLOWLIST=1; shift ;;
     --print-required)  PRINT_REQUIRED=1; shift ;;
     --)                END_OF_FLAGS=1; shift ;;
@@ -257,11 +281,40 @@ path_is_allowed() { # path
 }
 
 # --- 3. what are we staging? ------------------------------------------------
+# --pr-paths: the caller's named list replaces the allowlist, and is checked here
+# before any guard or git write. '..' is refused outright, or wiki/../chats/x
+# would walk past the chats/ check.
+if [[ $PR_MODE -eq 1 ]]; then
+  [[ -n "${PIN+set}" ]] || refuse "--pr-paths needs --pin BRANCH:SHA"     "  A PR-bound commit is always pinned: pass session.sh --start's pin: value."
+  [[ ${#PATHS[@]} -gt 0 ]] || refuse "--pr-paths names no path"     "  Name each path to commit. --pr-paths never falls back to the allowlist."
+  bad=()
+  for i in "${!PATHS[@]}"; do
+    p="${PATHS[$i]#./}"; p="${p%/}"; PATHS[$i]="$p"
+    case "/$p/" in
+      //|/./|*/../*|/chats/*) bad+=("$p (outside the vault, or under chats/)"); continue ;;
+    esac
+    [[ "$p" == /* || "$p" == [A-Za-z]:* ]] && { bad+=("$p (absolute)"); continue; }
+    # One literal file each: a glob or a directory would sweep unnamed edits
+    # (unreviewed drafts, repos.json) into the PR and still pass step 6.
+    case "$p" in *[\*\?\[]*|:*) bad+=("$p (a pattern, not a file)"); continue ;; esac
+    [[ -d "$VAULT/$p" ]] && { bad+=("$p (a directory, not a file)"); continue; }
+    # A path that neither exists nor is tracked is a typo. Catch it here, or
+    # step 5 fails midway and leaves the earlier paths staged.
+    [[ -e "$VAULT/$p" ]] || git -C "$VAULT" ls-files --error-unmatch -- ":(literal)$p" >/dev/null 2>&1 ||
+      { bad+=("$p (no such file, and not tracked)"); continue; }
+    # --no-index: a tracked file under a newer ignore rule is still private.
+    git -C "$VAULT" check-ignore -q --no-index -- "$p" 2>/dev/null && bad+=("$p (gitignored)")
+  done
+  if [[ ${#bad[@]} -gt 0 ]]; then
+    refuse "--pr-paths names path(s) a vault commit may never carry"       "$(printf '    %s
+' "${bad[@]}")"       "  Name each file literally. chats/ and gitignored paths are private by"       "  design. Nothing was staged."
+  fi
+  ALLOW=("${PATHS[@]}")   # from here on, "allowed" means "named by the caller"
 # No path arguments => the whole allowlist. Path arguments => a SUBSET of it, and
 # each one must itself be covered by the allowlist. A caller asking to stage a
 # path the vault does not permit is a bug in the caller, not a thing to silently
 # drop: dropping it would make the caller's commit quietly incomplete.
-if [[ ${#PATHS[@]} -eq 0 ]]; then
+elif [[ ${#PATHS[@]} -eq 0 ]]; then
   PATHS=("${ALLOW[@]}")
 else
   outside=()
@@ -347,6 +400,16 @@ if [[ $FORCE_COMMIT -eq 0 ]]; then
   fi
 fi
 
+# PR mode: the shared index must be empty BEFORE staging. Refusing only after
+# `git add` would leave this command's paths staged next to someone else's.
+if [[ $PR_MODE -eq 1 ]]; then
+  pre_staged="$(git -C "$VAULT" diff --cached --name-only 2>/dev/null)"
+  if [[ -n "$pre_staged" ]]; then
+    refuse "the shared index already holds staged paths"       "$(printf '%s
+' "$pre_staged" | sed 's/^/    /')"       "  A PR-bound commit carries only the paths it names. Nothing was staged,"       "  and nothing was unstaged: that work belongs to whoever staged it."
+  fi
+fi
+
 # --- 5. stage ---------------------------------------------------------------
 # Entries that match nothing in the working tree are skipped rather than passed
 # to `git add` (which errors on a pathspec that matches no file). An allowlist
@@ -369,8 +432,10 @@ entry_exists() { # vault-relative entry
 
 staged_any=0
 for entry in "${PATHS[@]}"; do
-  entry_exists "$entry" || continue
-  if ! add_err="$(git -C "$VAULT" add -- "$entry" 2>&1)"; then
+  # PR mode stages a named deletion too; git add refuses a path that never existed.
+  [[ $PR_MODE -eq 1 ]] || entry_exists "$entry" || continue
+  spec="$entry"; [[ $PR_MODE -eq 1 ]] && spec=":(literal)$entry"
+  if ! add_err="$(git -C "$VAULT" add -- "$spec" 2>&1)"; then
     refuse "'git add -- $entry' failed" \
       "$(printf '    %s\n' "$add_err")" \
       "  Common causes: the index is locked by a concurrent session, or every file" \
@@ -390,6 +455,9 @@ while IFS= read -r _line; do
 done < <(git -C "$VAULT" diff --cached --name-only 2>/dev/null)
 
 if [[ ${#STAGED[@]} -eq 0 ]]; then
+  # PR mode: the caller named edits it expects to ship. Exit 0 here would let it
+  # push and open a PR without them.
+  [[ $PR_MODE -eq 1 ]] && refuse "the named path(s) have no changes to commit: ${PATHS[*]}"     "  Nothing was staged and nothing was committed. Check the edits landed."
   if [[ $staged_any -eq 0 ]]; then
     echo "VAULT-COMMIT: OK - nothing to commit (no allowlisted path has changes)"
   else

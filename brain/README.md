@@ -141,7 +141,7 @@ Measured 2026-08-05, across the two real vaults:
 
 ### Layer 1 — the gate: `bin/vault-commit.sh` (this is the one that holds)
 
-Every command that commits to a vault goes through it. `/brain:save` step 6 and `bin/sync-graph.sh` call it; nothing else runs `git commit` against a vault. It enforces, mechanically:
+Every command that commits to a vault goes through it. `/brain:save` step 6 and `bin/sync-graph.sh` call it, and `/brain:promote`, `/brain:tidy` and `/brain:verify` commit trusted notes for their PR through its `--pr-paths` mode; nothing else runs `git commit` against a vault. It enforces, mechanically:
 
 | Refusal | Override |
 |---|---|
@@ -150,6 +150,7 @@ Every command that commits to a vault goes through it. `/brain:save` step 6 and 
 | the branch has an **open PR** | `--force-commit` |
 | **no `.saveinclude`**, or an empty one | **none** |
 | the git index contains **any path outside `.saveinclude`** | **none** |
+| `--pr-paths` (a PR-bound commit of named paths outside `.saveinclude`): no `--pin`, a named path under `chats/`, gitignored or outside the vault, or **anything already staged** | **none** |
 
 The last row is the one that makes the guarantee real. The git index is **global to the checkout**, so a concurrent session or a stray `git add` can stage anything at all; being careful about what *we* add only governs what we add. Checking the index before committing is what turns "we only commit allowlisted paths" from an intention into a property. And every guard runs *before* the first `git add`, so a refusal leaves the index exactly as it found it — nothing staged, nothing to clean up.
 

@@ -26,6 +26,9 @@
 #                               makes "no command commits outside .saveinclude"
 #                               a property rather than an intention, because the
 #                               git index is shared by every session in the tree
+#   --pr-paths (INNOV-363)    — NO override: no --pin, a named path under chats/,
+#                               gitignored or outside the vault, or ANY path
+#                               already staged (checked before staging)
 #
 # Run:  bash tests/test-vault-commit.sh   (from anywhere)
 # No network. Real git repos in mktemp sandboxes; `gh` is a stub on PATH.
@@ -616,6 +619,197 @@ assert_eq "contract/success-has-exactly-one-verdict-line" "1" \
   "$(cat "$BOX/out.txt" "$BOX/err.txt" 2>/dev/null | grep -c '^VAULT-COMMIT: ' || true)" "$(evidence)"
 assert_eq "contract/success-stderr-carries-no-verdict" "0" \
   "$(grep -c '^VAULT-COMMIT: ' "$BOX/err.txt" 2>/dev/null || true)" "$(evidence)"
+
+echo "--- G. --pr-paths: PR-bound commits of named paths outside the allowlist ---"
+# INNOV-363. Trusted notes (wiki/<area>/*.md) are off .saveinclude by design, so
+# /brain:promote, /brain:tidy and /brain:verify committed them with raw git and
+# re-implemented the guards in prose. --pr-paths gives them this script's guards
+# instead: the protected-branch refusal and the pin (both non-overridable), the
+# open-PR guard, an EMPTY index before staging, and exactly the named paths.
+
+# A trusted-note edit: a path the allowlist does not cover.
+make_trusted_dirty() { mkdir -p "$VAULT/wiki/area"; echo "fact $RANDOM" >>"$VAULT/wiki/area/note.md"; }
+
+# --- 33. a named trusted path commits on a working branch -------------------
+sb_new "brain/work"
+GH_PATH="$GH_NOPR"
+make_trusted_dirty
+make_dirty                                   # an allowlisted change NOT named
+before="$(head_sha)"
+run_guard -m "verify: 1 verified" --pin "brain/work:$before" --pr-paths wiki/area/note.md
+assert_eq "pr-paths/commits-exit-0" "0" "$STATUS" "$(evidence)"
+assert_prefix "pr-paths/verdict-line" "VAULT-COMMIT: OK" "$(first_line "$BOX/out.txt")" "$(evidence)"
+assert_eq "pr-paths/commit-message-used" "verify: 1 verified" "$(head_subject)" "$(evidence)"
+assert_eq "pr-paths/commits-only-the-named-path" "wiki/area/note.md" \
+  "$(git -C "$VAULT" show --name-only --format= HEAD | tr -d '\r')" "$(evidence)"
+assert_contains "pr-paths/unnamed-change-left-in-tree" "wiki/log.md" \
+  "$(git -C "$VAULT" status --porcelain)" "$(evidence)"
+
+# --- 34. a named deletion is staged (promote drops and moves drafts) --------
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+mkdir -p "$VAULT/wiki/_drafts"
+echo "draft" >"$VAULT/wiki/_drafts/d.md"
+git -C "$VAULT" add -A >/dev/null 2>&1
+git -C "$VAULT" commit -qm "a draft" >/dev/null 2>&1
+rm "$VAULT/wiki/_drafts/d.md"
+make_trusted_dirty
+before="$(head_sha)"
+run_guard -m "promote" --pin "brain/work:$before" --pr-paths wiki/_drafts/d.md wiki/area/note.md
+assert_eq "pr-paths/deletion-exit-0" "0" "$STATUS" "$(evidence)"
+assert_contains "pr-paths/deletion-committed" "D	wiki/_drafts/d.md" \
+  "$(git -C "$VAULT" show --name-status --format= HEAD | tr -d '\r')" "$(evidence)"
+
+# --- 35. refuses on the protected branch, even pinned and named -------------
+sb_new "main"
+GH_PATH="$GH_NONE"
+make_trusted_dirty
+before="$(head_sha)"
+run_guard -m "onto main" --pin "main:$before" --pr-paths wiki/area/note.md --force-commit
+assert_eq "pr-paths/protected-refused" "1" "$STATUS" "$(evidence)"
+assert_prefix "pr-paths/protected-verdict" "VAULT-COMMIT: REFUSED" "$(first_line "$BOX/err.txt")" "$(evidence)"
+assert_eq "pr-paths/protected-head-unmoved" "$before" "$(head_sha)" "$(evidence)"
+assert_eq "pr-paths/protected-index-untouched" "0" "$(staged_count)" "$(evidence)"
+assert_contains "pr-paths/protected-reason" "protected/default branch" "$(out_all)" "$(evidence)"
+
+# --- 36. refuses on a moved pin ---------------------------------------------
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+stale_sha="$(head_sha)"
+make_dirty
+git -C "$VAULT" commit -qam "concurrent session commit" >/dev/null 2>&1
+make_trusted_dirty
+now_sha="$(head_sha)"
+run_guard -m "mine" --pin "brain/work:$stale_sha" --pr-paths wiki/area/note.md
+assert_eq "pr-paths/moved-pin-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "pr-paths/moved-pin-head-unmoved" "$now_sha" "$(head_sha)" "$(evidence)"
+assert_eq "pr-paths/moved-pin-index-untouched" "0" "$(staged_count)" "$(evidence)"
+assert_contains "pr-paths/moved-pin-reason" "HEAD moved" "$(out_all)" "$(evidence)"
+
+# --- 37. the pin is REQUIRED: no pin is a refusal, never "unpinned" ---------
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+make_trusted_dirty
+before="$(head_sha)"
+run_guard -m "unpinned" --pr-paths wiki/area/note.md
+assert_eq "pr-paths/no-pin-refused" "1" "$STATUS" "$(evidence)"
+assert_contains "pr-paths/no-pin-explains" "--pr-paths needs --pin" "$(out_all)" "$(evidence)"
+assert_eq "pr-paths/no-pin-head-unmoved" "$before" "$(head_sha)" "$(evidence)"
+
+# --- 38. refuses when a stray path is already staged — BEFORE staging -------
+# Unlike the default mode's allowlist check, this refuses on ANY staged path,
+# allowlisted or not: the PR must carry exactly what the caller named.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+make_dirty
+git -C "$VAULT" add wiki/log.md >/dev/null 2>&1   # "another session"
+make_trusted_dirty
+before="$(head_sha)"
+run_guard -m "stray" --pin "brain/work:$before" --pr-paths wiki/area/note.md
+assert_eq "pr-paths/stray-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "pr-paths/stray-head-unmoved" "$before" "$(head_sha)" "$(evidence)"
+assert_contains "pr-paths/stray-named" "wiki/log.md" "$(out_all)" "$(evidence)"
+assert_contains "pr-paths/stray-reason" "already holds" "$(out_all)" "$(evidence)"
+assert_eq "pr-paths/stray-named-path-not-staged" "wiki/log.md" "$(staged_list | tr -d '\r')" "$(evidence)"
+
+# --- 39. refuses a gitignored path ------------------------------------------
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+printf 'private/\n' >"$VAULT/.gitignore"
+git -C "$VAULT" add .gitignore >/dev/null 2>&1
+git -C "$VAULT" commit -qm "ignore private" >/dev/null 2>&1
+mkdir -p "$VAULT/private"
+echo "secret" >"$VAULT/private/x.md"
+before="$(head_sha)"
+run_guard -m "ignored" --pin "brain/work:$before" --pr-paths private/x.md
+assert_eq "pr-paths/gitignored-refused" "1" "$STATUS" "$(evidence)"
+assert_contains "pr-paths/gitignored-named" "private/x.md" "$(out_all)" "$(evidence)"
+assert_contains "pr-paths/gitignored-reason" "gitignored" "$(out_all)" "$(evidence)"
+assert_eq "pr-paths/gitignored-index-untouched" "0" "$(staged_count)" "$(evidence)"
+
+# --- 40. refuses chats/, including via a '..' walk --------------------------
+for p in chats/secret.md wiki/../chats/secret.md; do
+  sb_new "brain/work"
+  GH_PATH="$GH_NONE"
+  mkdir -p "$VAULT/chats"
+  echo "private transcript" >"$VAULT/chats/secret.md"
+  before="$(head_sha)"
+  run_guard -m "chats" --pin "brain/work:$before" --pr-paths "$p"
+  assert_eq "pr-paths/chats-refused/$p" "1" "$STATUS" "$(evidence)"
+  assert_eq "pr-paths/chats-index-untouched/$p" "0" "$(staged_count)" "$(evidence)"
+  assert_contains "pr-paths/chats-reason/$p" "chats/" "$(out_all)" "$(evidence)"
+done
+
+# --- 41. --pr-paths with no path is a refusal, never "the whole allowlist" ---
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+make_dirty
+before="$(head_sha)"
+run_guard -m "nothing named" --pin "brain/work:$before" --pr-paths
+assert_eq "pr-paths/no-paths-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "pr-paths/no-paths-head-unmoved" "$before" "$(head_sha)" "$(evidence)"
+assert_contains "pr-paths/no-paths-reason" "names no path" "$(out_all)" "$(evidence)"
+
+# --- 42. the open-PR guard still applies ------------------------------------
+sb_new "brain/work"
+GH_PATH="$GH_PR"
+make_trusted_dirty
+before="$(head_sha)"
+run_guard -m "onto a PR" --pin "brain/work:$before" --pr-paths wiki/area/note.md
+assert_eq "pr-paths/open-pr-refused" "1" "$STATUS" "$(evidence)"
+assert_contains "pr-paths/open-pr-named" "4242" "$(out_all)" "$(evidence)"
+
+# --- 43. only literal FILE paths: a glob or a directory would sweep in
+# unreviewed drafts and unnamed edits, and "covered by a named path" would pass.
+for p in '*' 'wiki' 'wiki/*.md'; do
+  sb_new "brain/work"
+  GH_PATH="$GH_NONE"
+  mkdir -p "$VAULT/wiki/_drafts"
+  echo "unreviewed" >"$VAULT/wiki/_drafts/unreviewed.md"
+  make_trusted_dirty
+  before="$(head_sha)"
+  run_guard -m "sweep" --pin "brain/work:$before" --pr-paths "$p"
+  assert_eq "pr-paths/not-a-file-refused/$p" "1" "$STATUS" "$(evidence)"
+  assert_eq "pr-paths/not-a-file-head-unmoved/$p" "$before" "$(head_sha)" "$(evidence)"
+  assert_eq "pr-paths/not-a-file-index-untouched/$p" "0" "$(staged_count)" "$(evidence)"
+done
+
+# --- 44. a TRACKED file under a newer ignore rule is still gitignored ---------
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+mkdir -p "$VAULT/private"
+echo "secret" >"$VAULT/private/x.md"
+git -C "$VAULT" add private/x.md >/dev/null 2>&1
+git -C "$VAULT" commit -qm "tracked before the rule" >/dev/null 2>&1
+printf 'private/\n' >"$VAULT/.gitignore"
+git -C "$VAULT" add .gitignore >/dev/null 2>&1
+git -C "$VAULT" commit -qm "ignore private" >/dev/null 2>&1
+echo "more" >>"$VAULT/private/x.md"
+before="$(head_sha)"
+run_guard -m "tracked ignored" --pin "brain/work:$before" --pr-paths private/x.md
+assert_eq "pr-paths/tracked-ignored-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "pr-paths/tracked-ignored-head-unmoved" "$before" "$(head_sha)" "$(evidence)"
+assert_contains "pr-paths/tracked-ignored-reason" "(gitignored)" "$(out_all)" "$(evidence)"
+
+# --- 45. a path that neither exists nor is tracked refuses with NOTHING staged,
+# even when an earlier named path is valid (no half-staged index to recover).
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+make_trusted_dirty
+before="$(head_sha)"
+run_guard -m "typo" --pin "brain/work:$before" --pr-paths wiki/area/note.md wiki/area/typo.md
+assert_eq "pr-paths/missing-refused" "1" "$STATUS" "$(evidence)"
+assert_contains "pr-paths/missing-named" "wiki/area/typo.md" "$(out_all)" "$(evidence)"
+assert_eq "pr-paths/missing-index-untouched" "0" "$(staged_count)" "$(evidence)"
+
+# --- 46. named paths with no change refuse: the caller expected a commit, and an
+# exit 0 would let it push and open a PR without its edits.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+before="$(head_sha)"
+run_guard -m "no change" --pin "brain/work:$before" --pr-paths wiki/hot.md
+assert_eq "pr-paths/no-change-refused" "1" "$STATUS" "$(evidence)"
+assert_contains "pr-paths/no-change-reason" "no changes" "$(out_all)" "$(evidence)"
 
 # ------------------------------------------------------------------ done ---
 echo

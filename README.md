@@ -62,7 +62,8 @@ branch, so concurrent agents cannot overwrite `hot.md` or commit into each other
 ## Vault governance — the script is the gate
 
 `bin/vault-commit.sh` is the **single commit path** into any vault: `/brain:save` and `bin/sync-graph.sh`
-both go through it, and nothing else runs `git commit` against a vault. It refuses on the protected/default
+both go through it, `/brain:promote`, `/brain:tidy` and `/brain:verify` commit trusted notes for their PR
+through its `--pr-paths` mode, and nothing else runs `git commit` against a vault. It refuses on the protected/default
 branch (no override), refuses if HEAD moved mid-command, refuses on a branch with an open PR
 (`--force-commit` overrides that one only), stages only `.saveinclude` paths, and then **verifies the whole
 git index** against that allowlist — the index is global to the checkout, so staging discipline alone
