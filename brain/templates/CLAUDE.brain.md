@@ -10,22 +10,34 @@ When answering questions about the codebase or making changes, resolve context i
 
 1. **Graph first.** Query the Graphify graph for structural questions — what connects to what, where a concept lives, blast radius of a change. **Traverse the graph; do not `grep`/`rg` raw source to discover structure.** The rule is **graph-first when fresh, advisory otherwise** (see the staleness rule below).
 2. **Wiki second.** Search `wiki/` for decisions, gotchas, contracts, and rationale — the *why* that code can't tell you.
-3. **Raw code last.** Only read source files when you are about to edit them, or when 1–2 came up empty.
+3. **Raw code last.** Only read source files when you are about to edit them, or when 1–2 came up empty. The one raw *search* the graph cannot replace is confirming a caller or usage list: the graph finds structure, it only bounds blast radius from below.
 
 > **Graph before grep — this is the point of the brain.** A `grep`/`rg`/`Grep` sweep over source to find "where does X live" or "what calls Y" is exactly the stateless re-derivation this vault exists to replace. A self-gating `PreToolUse` hook (shipped by the brain plugin) reminds you of this — once per session, with the graph's built-from commit vs HEAD — when you reach for `Grep` while a `graphify-out/graph.json` is present.
 
-> **Staleness rule — the correctness keystone.** **Graph-first when fresh, advisory otherwise.** The graph reflects the commit it was built from (`built_at_commit` in `graph.json`). When that matches HEAD, treat it as authoritative for **pre-existing, committed structure only — NEVER for any file the session is editing or about to edit** (those are read raw, every time). When it lags HEAD, graph answers are **advisory hints** — verify against source. Fall back to raw read/grep when: (a) no `graphify-out/graph.json` is present; (b) the query returns no nodes, collides on a generic term, the hit carries no `source_location`, or `confidence` is weak; or (c) you are about to edit the file. Staleness downgrades a graph answer to a hint, it never errors.
+> **Staleness rule — the correctness keystone.** **Graph-first when fresh, advisory otherwise.** The graph reflects the commit it was built from (`built_at_commit` in `graph.json`). When that matches HEAD, trust it for **where pre-existing, committed symbols exist and are defined — NEVER for any file the session is editing or about to edit** (those are read raw, every time). Even fresh, a caller or usage list is a **minimum, never complete**: graphify does not resolve types, so it misses calls made through a field (`mApp.launchKDS()`) and calls across languages (Java into Kotlin). Confirm blast radius with a raw search. When it lags HEAD, graph answers are **advisory hints** — verify against source. Fall back to raw read/grep when: (a) no `graphify-out/graph.json` is present; (b) the query returns no nodes, **no result names the symbol you asked about** (that answer is "not found in the graph", not "nothing calls it"), collides on a generic term, the hit carries no `source_location`, or `confidence` is weak; or (c) you are about to edit the file. Staleness downgrades a graph answer to a hint, it never errors.
 
 **How to query the graph:**
 
-- **Working inside a covered repo** (cwd has `graphify-out/`): just ask in natural language — the graphify skill auto-detects the local graph and runs `graphify query "<question>"`.
+- **Working inside a covered repo** (cwd has `graphify-out/`): use the exact symbol name — `graphify explain "<Symbol>"` (what it is and its neighbours) and `graphify affected "<Symbol>"` (what depends on it). Use `graphify query "<question>"` only when you do not know the name: a plain-English query matches words, not meaning ("What" matched a file named `WhatToDoDialog.kt`).
 - **Working inside this vault** (querying a mirror): scope by repo —
   ```bash
-  graphify query "<question>" --graph graphify/<repo>/graph.json
-  graphify path "<A>" "<B>"   --graph graphify/<repo>/graph.json
+  graphify explain  "<Symbol>"   --graph graphify/<repo>/graph.json
+  graphify affected "<Symbol>"   --graph graphify/<repo>/graph.json
+  graphify path "<A>" "<B>"      --graph graphify/<repo>/graph.json
+  graphify query "<question>"    --graph graphify/<repo>/graph.json   # only when you lack the name
   ```
   **Always scope by repo** — generic terms collide across repos. Per-repo entry vocabulary lives in `wiki/hot.md`.
 - **Querying the wiki itself as a graph** (step 2): the vault's own concept graph lives at `graphify-out/graph.json` (built over `wiki/`). Run `graphify query "<question>"` from the vault root. Its nodes carry the **code-symbol names** the notes reference, so you can hop from a symbol to its rationale in one query. Rebuild after editing notes via the **`/graphify` skill** (`/graphify wiki --update` — host-session extraction, keyless), **not** the bare `graphify` CLI; [[save]] does this in step 5c.
+
+## What the graph does not see
+
+The code graph is an AST extraction of app source files. A missing answer here is invisible, not an error:
+
+- **XML and other config formats** — Android `res/` layouts and `AndroidManifest.xml`, YAML, `.properties`. None of it is in the code graph (a package manifest such as `pom.xml` is read only as a dependency list).
+- **Calls through a field or variable** — types are not resolved, so `mApp.launchKDS()` is not linked to `launchKDS`.
+- **Cross-language calls** — Java calling Kotlin, or any call that crosses a language boundary.
+
+Questions that touch these need a raw search.
 
 ## Graph scope — the standard (predetermined; do NOT improvise per-repo)
 
