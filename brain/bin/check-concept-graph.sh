@@ -112,15 +112,16 @@ fi
 # every /brain:save makes. A graph committed at or after that save means the
 # clock was reset since, so M is 0. Committed history only: one diff, adds,
 # modifies, renames (new path) and deletions each one entry, as N counts them.
+# The `-- wiki` pathspec resolves from the vault dir, so it already scopes the
+# diff to this vault's wiki/ even when the vault is a repo subdirectory.
 SAVE="$(git -C "$VAULT" log -1 --format=%H -- logs 2>/dev/null | tr -d '[:space:]')"
 if [[ -z "$SAVE" ]]; then
   WAS="no prior save"
 elif git -C "$VAULT" merge-base --is-ancestor "$SAVE" "$LAST" 2>/dev/null; then
   WAS="was 0 at last save"
 else
-  PREFIX="$(git -C "$VAULT" rev-parse --show-prefix 2>/dev/null)"
   M="$(git -C "$VAULT" -c core.quotepath=false diff --name-only -M "$LAST" "$SAVE" -- wiki 2>/dev/null \
-    | grep -c "^${PREFIX}wiki/.*\.md$" | tr -d '[:space:]')"
+    | grep -c '\.md$' | tr -d '[:space:]')"
   WAS="was ${M:-0} at last save"
 fi
 

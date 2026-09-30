@@ -154,8 +154,12 @@ Resolve the vault root as `$BRAIN_ROOT` (else the current project dir / cwd). Al
      `/brain:init` installs graphify at the pinned version, and `/brain:doctor` check 1 reports the same gap. Never record this as prose such as "not rebuilt, CLI not installed". The check comes first because the skill fix below assumes the CLI is present.
    - **If graphify refuses to shrink the graph** (`refused to shrink graphify-out/graph.json`, or `build_merge would shrink graph from X → Y nodes`, graphify #479) during a wiki `--update`, the cause is known: a chunking bug. When `log.md`, `hot.md` or `index.md` share an extraction chunk with other notes, their nodes are lost and the new graph comes out smaller. Relay the refusal and apply this remedy. **Do not propose any other workaround**, including the `--force` that graphify's own message suggests:
      1. Re-run the `--update` with `log.md`, `hot.md` and `index.md` each in its own chunk.
-     2. If it refuses again, run a full rebuild through the skill (`/graphify wiki`, no `--update`).
-     3. Never `--force` and never prune sources. The guard is right: the smaller graph is the broken one.
+     2. If it refuses again, run a full rebuild through the skill (`/graphify wiki`, no `--update`), again with those three notes in their own chunks.
+     3. If the full rebuild also refuses, check whether notes were deleted since the graph was built:
+        ```bash
+        bash "${CLAUDE_PLUGIN_ROOT}/bin/changed-wiki-notes.sh" --deleted --since "$(git log -1 --format=%H -- graphify-out/graph.json)"
+        ```
+        If it lists notes, the corpus really did shrink and graphify's guard cannot know it (INNOV-292). This is the only case where `--force` is right: re-run the full rebuild from step 2, with `--force`, and name the deleted count in the output block. If it lists nothing, the smaller graph is the broken one. Never `--force` in that case, and never prune sources.
 
      Treat a `build_merge` run whose hyperedge count drops against the committed `graph.json` the same way, since it is the same merge losing structure: go straight to the full rebuild. If the full rebuild also fails, report `5c SKIPPED (shrink guard: <graphify's line>) — CONCEPT-GRAPH: …` and carry it forward as an open loop. Do not leave the saver to improvise.
    - **If the `/graphify` skill isn't available** (not in the skill list / `~/.claude/skills/graphify/SKILL.md` missing — the CLI installs separately from the skill), **fix it, don't defer it**: run `graphify install --platform claude`, tell the user the skill activates after a session restart (or `/reload-plugins`), and note the wiki-graph refresh as the first step of the next session. Never park this as a vague "open loop" without the one-line fix — a stale concept graph quietly degrades every future query.

@@ -501,6 +501,28 @@ run_guard "$GUARD"
 assert_contains "graph-after-save/was-0" "was 0 at last save" \
   "$(first_line "$BOX/err.txt")" "$(evidence "$BOX")"
 
+# vault nested in a repo under a path with regex metacharacters: M still counts
+# (a regex-interpolated prefix would match nothing and report was 0). Git for
+# Windows cannot enter a path containing '[', and no Windows-legal character is
+# a BRE metachar git can enter, so this case runs where the path is usable
+# (the ubuntu CI job) and says so where it is not.
+BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+VAULT="$BOX/repo/v[1].x"
+mkdir -p "$VAULT/wiki" "$VAULT/graphify-out"
+git init -q "$BOX/repo" >/dev/null 2>&1
+if git -C "$VAULT" rev-parse --is-inside-work-tree >/dev/null 2>&1; then
+  printf '{"nodes":[]}\n' >"$VAULT/graphify-out/graph.json"
+  git_init_commit "$BOX/repo" "nested vault + graph"
+  add_notes "$VAULT" before 4
+  save_commit "$VAULT" s1
+  add_notes "$VAULT" after 2
+  run_guard "$GUARD" CONCEPT_GRAPH_THRESHOLD=3
+  assert_contains "last-save-nested-regex-path/was-4" "was 4 at last save" \
+    "$(first_line "$BOX/err.txt")" "$(evidence "$BOX")"
+else
+  echo "SKIP last-save-nested-regex-path: git cannot enter '$VAULT' on this platform"
+fi
+
 # never saved => says so, never invents a number
 new_vault
 add_notes "$VAULT" prior 30
@@ -558,6 +580,8 @@ for want in \
   '`log.md`, `hot.md` and `index.md` each in its own chunk' \
   'Never `--force`' \
   'Do not propose any other workaround' \
+  'changed-wiki-notes.sh" --deleted --since' \
+  'the only case where `--force` is right' \
   'build_merge' \
   'DETECT-NARROW:'; do
   assert_contains "save-5c/has:$want" "$want" "$STEP5C" \
