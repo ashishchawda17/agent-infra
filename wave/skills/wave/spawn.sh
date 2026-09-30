@@ -42,6 +42,10 @@ PROMPT="WAVE WORKER (round $ROUND; successor opt-in).
    otherwise. If /preflight fails twice on the SAME command, escalate: invoke the
    gate-loop skill with gateCommands narrowed to that command. Otherwise fix it
    yourself.
+   Timeouts in tests your diff does not touch, that pass when run alone, are machine
+   load from sibling workers, not a failure on the same command: do not gate-loop
+   them (repair agents would edit unrelated tests to hide load). Re-run with less
+   parallelism and say so in your summary.
 4.5 Fresh review, BEFORE you open the PR. Your own context is not a review.
    Codex Terra is the required correctness reviewer. If the diff changes auth,
    authorization, payments, public API contracts, concurrency, recovery behavior,

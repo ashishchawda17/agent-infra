@@ -96,6 +96,7 @@ assert_contains "jira/base-from-origin-head" "$out" "PR against trunk"
 assert_contains "jira/queue-in-refill" "$out" "project = ABC AND labels = agent-ready"
 assert_contains "jira/file-to" "$out" "File follow-ups to Jira project ABC"
 assert_not_contains "jira/no-linear-verbs" "$out" "orca linear"
+assert_contains "jira/load-timeouts-not-gate-loop" "$out" "not a failure on the same command: do not gate-loop"
 
 echo "--- 4. worker script paths are absolute and exist ---"
 review_path="$(grep -o 'bash "[^"]*/review.sh"' <<<"$out" | head -1 | sed 's/^bash "//; s/"$//')"

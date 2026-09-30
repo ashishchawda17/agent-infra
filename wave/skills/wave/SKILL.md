@@ -142,6 +142,10 @@ better than size does.
   an issue that already has a worktree in this repo.
 - **`gate-loop` only on escalation** — after `/preflight` fails twice on the same
   command. Generators for a one-line diff are waste, and they overwrite test files.
+- **Load timeouts are not a gate failure.** Three workers each running a test suite at
+  full width oversubscribe the machine: unrelated tests time out, a different set each
+  run, all passing alone (SPO waves 4–5, 2026-09-30). Workers re-run narrower instead
+  of gate-looping; cap per-worker test parallelism in the repo's `notes.md`.
 - **Workers never clean up their own worktree**, even when told the PR merged.
 - **Gitignored files the build needs** (`.env.local` and the like): copy them in
   Orca's setup hook, and say so in `notes.md`, so agents stop improvising them.
