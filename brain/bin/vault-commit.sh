@@ -115,9 +115,12 @@
 #     has an override; the open-PR guard is exactly as above.
 #   - the index must be EMPTY before anything is staged: the commit carries what
 #     the caller named and nothing another session left in the shared index.
-#   - each named path must stay inside the vault, must not be under chats/, and
-#     must not be gitignored. A named deletion (a dropped or moved draft) stages.
-#   - after staging, every path in the index must be covered by a named path.
+#   - each named path must be one literal FILE (no glob, no directory), inside
+#     the vault, not under chats/, not gitignored (tracked or not), and either
+#     present or tracked, so a named deletion (a dropped or moved draft) stages.
+#   - after staging, every path in the index must be one of the named paths.
+#   - named paths with no change REFUSE (exit 1), unlike the default mode's
+#     "nothing to commit" exit 0: the caller is about to open a PR for them.
 #
 # NOTHING IS STAGED ON A REFUSAL. Every guard runs BEFORE the first `git add`, so
 # a refusal leaves the index exactly as it found it. The older sync-graph.sh
@@ -291,11 +294,20 @@ if [[ $PR_MODE -eq 1 ]]; then
       //|/./|*/../*|/chats/*) bad+=("$p (outside the vault, or under chats/)"); continue ;;
     esac
     [[ "$p" == /* || "$p" == [A-Za-z]:* ]] && { bad+=("$p (absolute)"); continue; }
-    git -C "$VAULT" check-ignore -q -- "$p" 2>/dev/null && bad+=("$p (gitignored)")
+    # One literal file each: a glob or a directory would sweep unnamed edits
+    # (unreviewed drafts, repos.json) into the PR and still pass step 6.
+    case "$p" in *[\*\?\[]*|:*) bad+=("$p (a pattern, not a file)"); continue ;; esac
+    [[ -d "$VAULT/$p" ]] && { bad+=("$p (a directory, not a file)"); continue; }
+    # A path that neither exists nor is tracked is a typo. Catch it here, or
+    # step 5 fails midway and leaves the earlier paths staged.
+    [[ -e "$VAULT/$p" ]] || git -C "$VAULT" ls-files --error-unmatch -- ":(literal)$p" >/dev/null 2>&1 ||
+      { bad+=("$p (no such file, and not tracked)"); continue; }
+    # --no-index: a tracked file under a newer ignore rule is still private.
+    git -C "$VAULT" check-ignore -q --no-index -- "$p" 2>/dev/null && bad+=("$p (gitignored)")
   done
   if [[ ${#bad[@]} -gt 0 ]]; then
     refuse "--pr-paths names path(s) a vault commit may never carry"       "$(printf '    %s
-' "${bad[@]}")"       "  chats/ and gitignored paths are private by design. Nothing was staged."
+' "${bad[@]}")"       "  Name each file literally. chats/ and gitignored paths are private by"       "  design. Nothing was staged."
   fi
   ALLOW=("${PATHS[@]}")   # from here on, "allowed" means "named by the caller"
 # No path arguments => the whole allowlist. Path arguments => a SUBSET of it, and
@@ -422,7 +434,8 @@ staged_any=0
 for entry in "${PATHS[@]}"; do
   # PR mode stages a named deletion too; git add refuses a path that never existed.
   [[ $PR_MODE -eq 1 ]] || entry_exists "$entry" || continue
-  if ! add_err="$(git -C "$VAULT" add -- "$entry" 2>&1)"; then
+  spec="$entry"; [[ $PR_MODE -eq 1 ]] && spec=":(literal)$entry"
+  if ! add_err="$(git -C "$VAULT" add -- "$spec" 2>&1)"; then
     refuse "'git add -- $entry' failed" \
       "$(printf '    %s\n' "$add_err")" \
       "  Common causes: the index is locked by a concurrent session, or every file" \
@@ -442,6 +455,9 @@ while IFS= read -r _line; do
 done < <(git -C "$VAULT" diff --cached --name-only 2>/dev/null)
 
 if [[ ${#STAGED[@]} -eq 0 ]]; then
+  # PR mode: the caller named edits it expects to ship. Exit 0 here would let it
+  # push and open a PR without them.
+  [[ $PR_MODE -eq 1 ]] && refuse "the named path(s) have no changes to commit: ${PATHS[*]}"     "  Nothing was staged and nothing was committed. Check the edits landed."
   if [[ $staged_any -eq 0 ]]; then
     echo "VAULT-COMMIT: OK - nothing to commit (no allowlisted path has changes)"
   else

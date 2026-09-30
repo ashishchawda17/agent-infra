@@ -759,6 +759,58 @@ run_guard -m "onto a PR" --pin "brain/work:$before" --pr-paths wiki/area/note.md
 assert_eq "pr-paths/open-pr-refused" "1" "$STATUS" "$(evidence)"
 assert_contains "pr-paths/open-pr-named" "4242" "$(out_all)" "$(evidence)"
 
+# --- 43. only literal FILE paths: a glob or a directory would sweep in
+# unreviewed drafts and unnamed edits, and "covered by a named path" would pass.
+for p in '*' 'wiki' 'wiki/*.md'; do
+  sb_new "brain/work"
+  GH_PATH="$GH_NONE"
+  mkdir -p "$VAULT/wiki/_drafts"
+  echo "unreviewed" >"$VAULT/wiki/_drafts/unreviewed.md"
+  make_trusted_dirty
+  before="$(head_sha)"
+  run_guard -m "sweep" --pin "brain/work:$before" --pr-paths "$p"
+  assert_eq "pr-paths/not-a-file-refused/$p" "1" "$STATUS" "$(evidence)"
+  assert_eq "pr-paths/not-a-file-head-unmoved/$p" "$before" "$(head_sha)" "$(evidence)"
+  assert_eq "pr-paths/not-a-file-index-untouched/$p" "0" "$(staged_count)" "$(evidence)"
+done
+
+# --- 44. a TRACKED file under a newer ignore rule is still gitignored ---------
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+mkdir -p "$VAULT/private"
+echo "secret" >"$VAULT/private/x.md"
+git -C "$VAULT" add private/x.md >/dev/null 2>&1
+git -C "$VAULT" commit -qm "tracked before the rule" >/dev/null 2>&1
+printf 'private/\n' >"$VAULT/.gitignore"
+git -C "$VAULT" add .gitignore >/dev/null 2>&1
+git -C "$VAULT" commit -qm "ignore private" >/dev/null 2>&1
+echo "more" >>"$VAULT/private/x.md"
+before="$(head_sha)"
+run_guard -m "tracked ignored" --pin "brain/work:$before" --pr-paths private/x.md
+assert_eq "pr-paths/tracked-ignored-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "pr-paths/tracked-ignored-head-unmoved" "$before" "$(head_sha)" "$(evidence)"
+assert_contains "pr-paths/tracked-ignored-reason" "(gitignored)" "$(out_all)" "$(evidence)"
+
+# --- 45. a path that neither exists nor is tracked refuses with NOTHING staged,
+# even when an earlier named path is valid (no half-staged index to recover).
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+make_trusted_dirty
+before="$(head_sha)"
+run_guard -m "typo" --pin "brain/work:$before" --pr-paths wiki/area/note.md wiki/area/typo.md
+assert_eq "pr-paths/missing-refused" "1" "$STATUS" "$(evidence)"
+assert_contains "pr-paths/missing-named" "wiki/area/typo.md" "$(out_all)" "$(evidence)"
+assert_eq "pr-paths/missing-index-untouched" "0" "$(staged_count)" "$(evidence)"
+
+# --- 46. named paths with no change refuse: the caller expected a commit, and an
+# exit 0 would let it push and open a PR without its edits.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+before="$(head_sha)"
+run_guard -m "no change" --pin "brain/work:$before" --pr-paths wiki/hot.md
+assert_eq "pr-paths/no-change-refused" "1" "$STATUS" "$(evidence)"
+assert_contains "pr-paths/no-change-reason" "no changes" "$(out_all)" "$(evidence)"
+
 # ------------------------------------------------------------------ done ---
 echo
 echo "$PASSED passed, $FAILED failed"

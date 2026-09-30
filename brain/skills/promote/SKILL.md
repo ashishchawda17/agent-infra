@@ -102,7 +102,7 @@ No arguments checks every note in `wiki/_drafts/`. Pass the keepers explicitly w
 
 ### 5. Ship as one PR
 
-1. Branch in the vault repo (e.g. `promote/drafts-<date>`).
+1. Stay on the working branch step 0's `session.sh --start` put you on. Do not create another: the pin names that branch, and `vault-commit.sh` refuses a commit from any other.
 2. Commit the moves, index lines, and merge edits. Dropped drafts are deleted in the same branch. Trusted notes are outside `.saveinclude`, so commit through `vault-commit.sh --pr-paths`, naming every path the batch touched, deleted drafts included: `bash "${CLAUDE_PLUGIN_ROOT}/bin/vault-commit.sh" -m "promote: <date>" --pin "<step 0's pin>" --pr-paths <each path>`. On `VAULT-COMMIT: REFUSED`, stop and relay its first line. Never commit with raw `git`, and never pass `--force-commit`.
 3. Open a PR per the vault's convention. PR body: table of promoted notes (draft → target), merges, drops with reasons, and any still-pending drafts with what blocks them.
 4. **Close the session record** — `bash "${CLAUDE_PLUGIN_ROOT}/bin/session.sh" --end` (from the vault root, or with `BRAIN_ROOT=<vault>` set). Run it on early exits too (empty queue, no decisions, a step 1b blocker). A lingering record only costs a spurious `SESSION: WARN` next time, but tidiness is cheap.

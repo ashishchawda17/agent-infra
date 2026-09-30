@@ -78,7 +78,7 @@ Before touching anything, show the full plan compactly: N anchors rewritten (wit
 
 ### 4. Apply on a branch
 
-1. Branch in the vault repo (e.g. `tidy/freshness-<date>`).
+1. Stay on the working branch step 0's `session.sh --start` put you on. Do not create another: the pin names that branch, and `vault-commit.sh` refuses a commit from any other.
 2. Apply the batch: `source:` rewrites and tag folds are frontmatter-only edits; hub notes are new files plus their `wiki/index.md` lines.
 3. **Verify by re-running the freshness scan** — the fixed categories' counts must drop and no new dead links may appear (a hub note with a typo'd `[[link]]` creates one; fix before shipping).
 4. Commit through `vault-commit.sh --pr-paths`, naming every edited or created note: `bash "${CLAUDE_PLUGIN_ROOT}/bin/vault-commit.sh" -m "tidy: <date>" --pin "<step 0's pin>" --pr-paths <each path>`. On `VAULT-COMMIT: REFUSED`, stop and relay its first line. Never commit with raw `git`, and never pass `--force-commit`. Then open a PR per the vault's convention. Report before/after counts and the remaining judgment queue in the PR body and to the user.
