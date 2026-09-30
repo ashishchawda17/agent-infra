@@ -29,7 +29,7 @@ On the vault's protected/default branch `--start` **creates the working branch**
 bash "${CLAUDE_PLUGIN_ROOT}/bin/session.sh" --start tidy   # from the vault root, or with BRAIN_ROOT=<vault> set
 ```
 
-- **Exit `0`, first line `SESSION: OK` →** recorded, and you are on a working branch. Go on to step 1.
+- **Exit `0`, first line `SESSION: OK` →** recorded, and you are on a working branch. Keep the second line (`pin: <branch>:<sha>`); step 4 commits with it. Go on to step 1.
 - **Exit `0`, first line `SESSION: WARN` →** proceed, but **another session is live against this vault.** Relay the script's `SESSION: WARN` line to the user **verbatim** — it names the other session's branch and pid; do not paraphrase or re-derive it. Treat it like step 2b's open-PR finding: context that shapes what you dare batch, not a stop.
 - **Exit `1`, first line `SESSION: REFUSED` →** **stop here and change nothing.** Relay the script's `SESSION: REFUSED` line to the user **verbatim** — it names the reason and the remedy — and **do not work around it with a raw `git checkout` / `git switch`.** The branch state it refused on is exactly what the guard is protecting.
 
@@ -81,7 +81,7 @@ Before touching anything, show the full plan compactly: N anchors rewritten (wit
 1. Branch in the vault repo (e.g. `tidy/freshness-<date>`).
 2. Apply the batch: `source:` rewrites and tag folds are frontmatter-only edits; hub notes are new files plus their `wiki/index.md` lines.
 3. **Verify by re-running the freshness scan** — the fixed categories' counts must drop and no new dead links may appear (a hub note with a typo'd `[[link]]` creates one; fix before shipping).
-4. Commit and open a PR per the vault's convention. Report before/after counts and the remaining judgment queue in the PR body and to the user.
+4. Commit through `vault-commit.sh --pr-paths`, naming every edited or created note: `bash "${CLAUDE_PLUGIN_ROOT}/bin/vault-commit.sh" -m "tidy: <date>" --pin "<step 0's pin>" --pr-paths <each path>`. On `VAULT-COMMIT: REFUSED`, stop and relay its first line. Never commit with raw `git`, and never pass `--force-commit`. Then open a PR per the vault's convention. Report before/after counts and the remaining judgment queue in the PR body and to the user.
 
 ### 5. Close the session record
 

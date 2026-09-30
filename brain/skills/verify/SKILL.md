@@ -122,24 +122,15 @@ Preserve each file's line endings (vault notes are often CRLF) and any trailing 
 
 ### 6. Commit and open one PR
 
-Trusted notes are outside `.saveinclude`, so `vault-commit.sh` would refuse this commit. This block applies the same guards itself. Run it **in the vault**, as one script, and stop on the first `VERIFY: REFUSED`:
+Trusted notes are outside `.saveinclude`, so commit them through `vault-commit.sh --pr-paths`, naming each edited note. It refuses a moved pin, the protected branch, a branch with an open PR, and an index that already holds staged paths, all before staging anything. Run it **in the vault**, and stop on `VAULT-COMMIT: REFUSED`:
 
 ```bash
-cd "${BRAIN_ROOT:-$PWD}" || exit 1                  # every git/gh command below acts on the vault
-PIN="<branch>:<sha>"                                # step 0's pin: line, verbatim
-BRANCH="${PIN%%:*}"
-[ "$(git rev-parse --abbrev-ref HEAD):$(git rev-parse HEAD)" = "$PIN" ] ||
-  { echo "VERIFY: REFUSED - HEAD moved since session.sh --start (branch switched, or another session committed here)"; exit 1; }
-[ -z "$(gh pr list --head "$BRANCH" --state open --json number --jq '.[].number' 2>/dev/null)" ] ||
-  { echo "VERIFY: REFUSED - '$BRANCH' already has an open PR; do not pile onto it"; exit 1; }
-[ -z "$(git diff --cached --name-only)" ] ||
-  { echo "VERIFY: REFUSED - the shared index already holds staged paths:"; git diff --cached --name-only; exit 1; }
-git add -- <each edited note>
-git commit -m "verify: <V> verified, <C> status set, <L> links fixed (<date>)"
+cd "${BRAIN_ROOT:-$PWD}" || exit 1                  # git/gh below act on the vault
+bash "${CLAUDE_PLUGIN_ROOT}/bin/vault-commit.sh" -m "verify: <V> verified, <C> status set, <L> links fixed (<date>)"   --pin "<branch>:<sha>" --pr-paths <each edited note> &&   # --pin: step 0's pin: line, verbatim
 git push -u origin HEAD && gh pr create --title "brain:verify <date>" --body-file <body.md>
 ```
 
-A moved HEAD means another session switched the checkout or committed onto this branch, and pushing would publish its work under this PR. A refusal leaves your edits in the working tree, uncommitted. Report it, and never commit someone else's staged work.
+A moved HEAD means another session switched the checkout or committed onto this branch, and pushing would publish its work under this PR. A refusal leaves your edits in the working tree, uncommitted. Relay its first line, and never commit someone else's staged work. Never pass `--force-commit` here.
 
 The PR body carries one table in four parts. The **could-not-tell** part is the one a person must read:
 
