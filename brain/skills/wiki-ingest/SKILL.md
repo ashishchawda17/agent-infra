@@ -45,13 +45,20 @@ bin/harvest-chats.mjs   →  chats/<repo>/*.md (status: raw)
    ---
    id: <area-kebab-slug>
    tags: [<cross-cutting>, <topic>]   # reuse existing tags (see CLAUDE.md vocab), don't coin singletons
-   source: chats/<repo>/<digest>.md  # the session it came from
+   digest: chats/<repo>/<digest>.md  # the session it came from — provenance, never an anchor
+   source: <repo/file#anchor, PR, or commit the fact is about>  # only if verified below; else omit the line
    owner: <github-handle>
    last_verified: <today>
    confidence: low      # drafts start low; review bumps it
    draft: true
    ---
    ```
+   **`digest:` vs `source:`.** The transcript goes in `digest:`. `chats/` is git-ignored, so it resolves only on the machine that ran the harvest, and a digest is a lossy summary rather than the fact itself. Never point `source:` at a `chats/` path. Write `source:` only when the digest names the tracked file, PR or commit the fact is about. Then check that draft by itself:
+   ```bash
+   node "${CLAUDE_PLUGIN_ROOT}/bin/check-anchors.mjs" wiki/_drafts/<new-draft>.md   # from the vault root, or with BRAIN_ROOT=<vault> set
+   ```
+   Keep the `source:` only on exit `0` (`ANCHORS: OK`). On any other result (broken, git-ignored, off-machine or otherwise unverifiable), delete the `source:` line; do not guess another path. A draft with no `source:` is the expected result. Across `wiki/_drafts/` that makes exit `2` normal, not a failure to fix; `/brain:promote` asks for the anchor.
+
    Body: the atomic fact, cross-linked with `[[wikilinks]]` to related notes. Add the `Code:` community line if it maps to a graph community (see `CLAUDE.md`). Because it's a draft, **flag what still needs verifying against live code** before promotion.
 
 4. **Mark the digest ingested.** Flip its frontmatter `status: raw` → `status: ingested` so the next run skips it.
