@@ -2,7 +2,7 @@
 import { initVault, resolveVault, syncVault, vaultStatus, startSession, endSession, getSession, publishSession } from '../core/vaults.mjs';
 import { prepareSave, applySave } from '../core/save.mjs';
 import { context } from '../core/context.mjs';
-import { readJson, runMaintenance, pluginRoot } from '../core/runtime.mjs';
+import { readJson, runMaintenance, pluginRoot, bashScript } from '../core/runtime.mjs';
 import { prepareGraph, recordGraph, graphStatus } from '../core/graph-inputs.mjs';
 import { importTranscript } from '../core/transcripts.mjs';
 
@@ -47,7 +47,11 @@ try {
     else if (command === 'context') result = context(target, options.task, options.budget ? Number(options.budget) : undefined);
     else if (command === 'resume') {
       const sync = options.session ? { state: 'session-snapshot' } : syncVault(vault);
-      result = { ...context(target, options.task, options.budget ? Number(options.budget) : undefined), sync };
+      // Same line /brain:resume prints as Backlog:, from the one copy of the counting
+      // rules. Context, never a gate: a failing helper drops the field, not resume.
+      let backlog;
+      try { backlog = bashScript('resume-brief.sh', ['--backlog'], target.path, options.session) || undefined; } catch {}
+      result = { ...context(target, options.task, options.budget ? Number(options.budget) : undefined), sync, backlog };
     }
     else if (command === 'publish') result = publishSession(vault, options.session);
     else if (command === 'harvest') {
