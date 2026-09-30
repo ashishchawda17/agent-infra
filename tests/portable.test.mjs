@@ -35,7 +35,8 @@ function fixture(t) {
   const env = { ...process.env, BRAIN_HOME: home, BRAIN_ROOT: '', BRAIN_SESSION_ID: '', CLAUDE_PROJECT_DIR: '',
     GIT_AUTHOR_NAME: 'Test', GIT_AUTHOR_EMAIL: 'test@example.invalid', GIT_COMMITTER_NAME: 'Test', GIT_COMMITTER_EMAIL: 'test@example.invalid' };
   const run = (...args) => {
-    const r = spawnSync(process.execPath, [cli, ...args], { cwd: project, env, encoding: 'utf8' });
+    const extra = typeof args.at(-1) === 'object' ? args.pop() : {};
+    const r = spawnSync(process.execPath, [cli, ...args], { cwd: project, env: { ...env, ...extra }, encoding: 'utf8' });
     let data; try { data = JSON.parse(r.stdout); } catch { data = { output: r.stdout, error: r.stderr }; }
     return { ...data, exit: r.status };
   };
@@ -155,4 +156,26 @@ test('save refuses an externally changed hot cache and never overwrites it', t =
   writeFileSync(payload, JSON.stringify({ preparation: prep.preparation, title: 'Stale', summary: 'stale', hot: 'Overwrite\n' }));
   assert.equal(f.run('save', 'apply', '--session', 'writer', '--input', payload).exit, 1);
   assert.equal(readFileSync(join(prep.path, 'wiki/hot.md'), 'utf8'), 'Other writer\n');
+});
+
+// INNOV-339: the portable resume carries the same Backlog: line /brain:resume
+// prints, from the one copy of the counting rules in resume-brief.sh --backlog.
+test('resume reports the harvest backlog, omits it when empty, and survives a failing helper', t => {
+  const f = fixture(t); const a = f.run('init', '--vault', pathToFileURL(f.remote).href);
+  assert.equal(a.exit, 0, JSON.stringify(a));
+  const empty = f.run('resume');
+  assert.equal(empty.exit, 0, JSON.stringify(empty));
+  assert.equal('backlog' in empty, false, 'no digests and no drafts: the field is omitted');
+  mkdirSync(join(a.vault.path, 'chats/app'), { recursive: true });
+  // CRLF: the vault is autocrlf, so an LF-only digest would be a false green.
+  writeFileSync(join(a.vault.path, 'chats/app/x.md'), '---\r\nstatus: raw\r\ndate: 2020-01-01\r\n---\r\n');
+  const full = f.run('resume');
+  assert.equal(full.exit, 0, JSON.stringify(full));
+  assert.match(full.backlog, /^Harvest: 1 raw \/ 0 ingested, newest 2020-01-01 \(\d+ days old\)$/);
+  assert.equal('backlog' in f.run('context'), false, 'context stays a purely local read');
+  // Negative control: the line is context, never a gate. Drop the catch and this fails.
+  const broken = f.run('resume', { BRAIN_BASH: join(f.dir, 'no-such-bash') });
+  assert.equal(broken.exit, 0, JSON.stringify(broken));
+  assert.equal(broken.state, 'context');
+  assert.equal('backlog' in broken, false);
 });
