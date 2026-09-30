@@ -35,7 +35,7 @@ import { join, basename, relative } from 'node:path';
 // revisions, the three-state verdict) lives in ONE place and is shared with
 // check-anchors.mjs — see brain/bin/anchors.mjs. Two implementations of one
 // resolver is the defect, not the convenience.
-import { buildAnchorContext, classifyAnchors, parseFrontmatter } from './anchors.mjs';
+import { buildAnchorContext, classifyAnchors, parseFrontmatter, enumValue, malformedEnums } from './anchors.mjs';
 
 const argv = process.argv.slice(2);
 const argVal = (flag) => (argv.indexOf(flag) >= 0 ? argv[argv.indexOf(flag) + 1] : undefined);
@@ -140,10 +140,6 @@ for (const meta of ['index.md', 'hot.md']) {
 for (const n of parsed) for (const l of n.links) inbound.add(l);
 
 // ---- checks ------------------------------------------------------------------
-const ENUMS = [
-  ['confidence', ['high', 'medium', 'low']],
-  ['status', ['current', 'superseded', 'falsified']],
-];
 const today = new Date();
 const deadLinks = [];
 const orphans = [];
@@ -182,16 +178,10 @@ for (const n of parsed) {
     tagCounts.get(t).push(rel);
   }
 
-  // 6. enum fields (INNOV-294). Only validated when present: absent `status:`
-  //    means `current`, and a missing `confidence:` is not this check's concern.
-  //    A trailing YAML comment is not part of the value (`#` after whitespace —
-  //    so this cannot eat a `#anchor`).
-  for (const [key, allowed] of ENUMS) {
-    if (!(key in n.fm)) continue;
-    const v = n.fm[key].replace(/\s+#.*$/, '');
-    if (!allowed.includes(v)) badEnums.push({ from: rel, key, value: n.fm[key], allowed });
-    else if (key === 'confidence' && v === 'low') lowConfidence.push({ from: rel });
-  }
+  // 6. enum fields (INNOV-294) — the rule lives in anchors.mjs, shared with the
+  //    promote gate.
+  for (const b of malformedEnums(n.fm)) badEnums.push({ from: rel, ...b });
+  if (enumValue(n.fm.confidence ?? '') === 'low') lowConfidence.push({ from: rel });
 
   // 3. stale last_verified
   if (n.fm.last_verified) {

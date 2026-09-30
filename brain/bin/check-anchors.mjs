@@ -39,6 +39,9 @@
 //                                     and the file is NOT, or it resolves into a
 //                                     different repo than the note's own area.
 //                                     Re-anchor the note; do not promote it as is.
+//                                     Also: a note whose `confidence:` or
+//                                     `status:` is outside its enum (INNOV-341)
+//                                     — fix the value; same stop, same exit.
 //   exit 2  => ANCHORS: UNVERIFIABLE — nothing is broken, but at least one anchor
 //                                     could not be checked here (no checkout,
 //                                     unknown repo prefix, unfetched pinned rev,
@@ -50,7 +53,8 @@
 // `ANCHORS: BROKEN` / `ANCHORS: UNVERIFIABLE` (stderr), so a caller can branch on
 // it without parsing prose. ALL FOUR COUNTS APPEAR ON EVERY PATH — verified,
 // broken, unverifiable, no-source — so the numbers are visible whether or not
-// anyone reads past the first line.
+// anyone reads past the first line. A malformed-enum count is appended only when
+// it is non-zero.
 //
 // Missing preconditions are never failures (same stance as check-freshness.sh
 // and check-hot-budget.sh): no wiki/, no wiki/_drafts/, a path that does not
@@ -62,7 +66,7 @@
 
 import { readFileSync, readdirSync, existsSync, statSync } from 'node:fs';
 import { join, relative, isAbsolute, resolve } from 'node:path';
-import { buildAnchorContext, classifyAnchors, parseFrontmatter } from './anchors.mjs';
+import { buildAnchorContext, classifyAnchors, parseFrontmatter, malformedEnums } from './anchors.mjs';
 
 const argv = process.argv.slice(2);
 const argVal = (flag) => (argv.indexOf(flag) >= 0 ? argv[argv.indexOf(flag) + 1] : undefined);
@@ -121,10 +125,12 @@ const mismatch = [];     // resolves into a different repo than the note's area
 const unresolvable = []; // could not check, either way
 const untracked = [];    // `source_untracked: true` — absence is the documented fact
 const noSource = [];     // no `source:` line at all
+const badEnums = [];     // `confidence:` / `status:` outside the INNOV-294 enums
 
 for (const f of notes) {
   const r = rel(f);
   const fm = parseFrontmatter(readFileSync(f, 'utf8'));
+  for (const b of malformedEnums(fm)) badEnums.push({ from: r, ...b });
   const results = classifyAnchors(ctx, { rel: r, source: fm.source, sourceUntracked: fm.source_untracked });
   if (!results.length) { noSource.push(r); continue; }
   for (const a of results) {
@@ -141,7 +147,8 @@ const counts =
   `${notes.length} note(s), ${anchorCount} anchor(s): ` +
   `${verified.length} verified, ${broken.length + mismatch.length} broken, ` +
   `${unresolvable.length} unverifiable, ${noSource.length} note(s) with no source:` +
-  (untracked.length ? ` (+${untracked.length} declared source_untracked)` : '');
+  (untracked.length ? ` (+${untracked.length} declared source_untracked)` : '') +
+  (badEnums.length ? `, ${badEnums.length} malformed enum(s)` : '');
 
 // ---- detail blocks -----------------------------------------------------------
 // Named notes and named repos, always — "N unverifiable" with no names is a
@@ -180,19 +187,31 @@ function brokenBlock() {
 
 const noSourceBlock = () => noSource.map((n) => `  - ${n} — no source: anchor at all`);
 
+const enumBlock = () =>
+  badEnums.map((b) => `  - ${b.from} — \`${b.key}: ${b.value}\` (allowed: ${b.allowed.join(' | ')})`);
+
 // ---- verdict — the counts are printed on EVERY path --------------------------
-if (!broken.length && !mismatch.length && !unresolvable.length && !noSource.length)
+if (!broken.length && !mismatch.length && !unresolvable.length && !noSource.length && !badEnums.length)
   ok(`ANCHORS: OK - ${counts}`);
 
-if (broken.length || mismatch.length) {
+if (broken.length || mismatch.length || badEnums.length) {
+  const rot = broken.length || mismatch.length;
   const out = [`ANCHORS: BROKEN - ${counts}`];
-  out.push(`  These anchors are rot: the repo IS present on this machine and the file is not.`);
-  out.push(...brokenBlock());
+  if (rot) {
+    out.push(`  These anchors are rot: the repo IS present on this machine and the file is not.`);
+    out.push(...brokenBlock());
+  }
+  if (badEnums.length) {
+    out.push(`  These notes carry a \`confidence:\` / \`status:\` value outside its enum:`);
+    out.push(...enumBlock());
+  }
   if (unresolvable.length) { out.push(`  Also could not be checked here:`); out.push(...unresolvableBlock()); }
   if (noSource.length) { out.push(`  Also carrying no anchor at all:`); out.push(...noSourceBlock()); }
-  out.push(`  Remedy: re-anchor each note to where the fact actually lives now, then re-run:`);
+  if (rot) out.push(`  Remedy: re-anchor each note to where the fact actually lives now, then re-run:`);
+  else out.push(`  Remedy: set each field to an allowed value (or drop \`status:\` — absent means current), then re-run:`);
   out.push(`    BRAIN_ROOT="${VAULT}" node check-anchors.mjs ${targets.join(' ')}`.trimEnd());
-  out.push(`  Do not promote a note whose anchor is broken — the trusted tier's only claim to trust is the anchor.`);
+  if (rot) out.push(`  Do not promote a note whose anchor is broken — the trusted tier's only claim to trust is the anchor.`);
+  if (badEnums.length) out.push(`  Do not promote a note with a malformed enum — it lands in the trusted tier as a freshness finding.`);
   console.error(out.join('\n'));
   process.exit(1);
 }
