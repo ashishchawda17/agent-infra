@@ -394,10 +394,11 @@ assert_eq "colon-mixed-multi/exit-2" "2" "$STATUS" "$(evidence)"
 assert_out_has "colon-mixed-multi/counts" "1 verified, 0 broken, 1 unverifiable, 0 note(s) with no source:" "$(evidence)"
 
 # --- 12. a git-IGNORED anchor is not verified (INNOV-304 / AIP-301) --------
-# wiki-ingest writes `source: chats/<repo>/<digest>.md`, and `chats/` is in the
-# vault's .gitignore: the file exists only on the machine that ran the harvest.
-# "exists on my disk" must never read as "verified" — it is a false green for
-# every teammate who pulls the vault.
+# wiki-ingest used to write `source: chats/<repo>/<digest>.md` (INNOV-327
+# stopped it), and `chats/` is in the vault's .gitignore: the file exists only
+# on the machine that ran the harvest. A note written the old way must still
+# read as unverifiable — "exists on my disk" is a false green for every
+# teammate who pulls the vault.
 echo "--- 12. git-ignored vault-local anchor ---"
 sb_new
 git init --quiet -b main "$VAULT"
@@ -443,6 +444,33 @@ for want in \
     fail "promote-skill/has:$want" "brain/skills/promote/SKILL.md must keep this sentence"
   fi
 done
+
+# ================================= wiki-ingest never anchors to chats/ ==
+# INNOV-327: case 12 makes a `chats/` anchor unverifiable, but wiki-ingest's
+# draft template kept writing one, so every ingested draft arrived
+# unverifiable. The transcript belongs in `digest:`; `source:` is the tracked
+# fact or absent. Scoped to the step-3 yaml template, so prose that forbids
+# the old anchor cannot trip the negative check.
+SKILL="$REPO_ROOT/brain/skills/wiki-ingest/SKILL.md"
+# ingest_template_ok <file> — 0 iff the yaml template carries the transcript in
+# digest: and never anchors source: to chats/.
+ingest_template_ok() {
+  local t
+  t="$(tr -d '\r' <"$1" | awk '/^   ```yaml/{on=1; next} on && /^   ```/{exit} on')"
+  [[ -n "$t" ]] &&
+    printf '%s\n' "$t" | grep -qE '^ *digest: chats/<repo>/<digest>\.md' &&
+    ! printf '%s\n' "$t" | grep -qE '^ *source: *chats/'
+}
+ingest_template_ok "$SKILL" && pass "ingest-template/digest-not-chats-source" ||
+  fail "ingest-template/digest-not-chats-source" "brain/skills/wiki-ingest/SKILL.md step-3 template must put the transcript in digest: chats/<repo>/<digest>.md and never write source: chats/"
+sb_new
+sed 's/$/\r/' "$SKILL" >"$BOX/crlf.md"
+ingest_template_ok "$BOX/crlf.md" && pass "ingest-template/crlf-still-matches" ||
+  fail "ingest-template/crlf-still-matches" "a CRLF copy of the skill lost the match"
+# Negative control: the pre-INNOV-327 anchor put back must fail the check.
+sed 's#^   digest: chats/#   source: chats/#' "$SKILL" >"$BOX/old.md"
+ingest_template_ok "$BOX/old.md" && fail "ingest-template/negative-control" "check passed with source: chats/ restored" ||
+  pass "ingest-template/negative-control"
 
 # ================================================================= SUMMARY ==
 echo

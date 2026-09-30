@@ -92,6 +92,7 @@ This is not bookkeeping. While the carve-out was a machine-local, git-excluded f
   last_verified: <YYYY-MM-DD>
   confidence: high | medium | low
   status: current | superseded | falsified   # optional; absent means current
+  digest: <chats/<repo>/<digest>.md>          # optional; the git-ignored transcript a draft was distilled from — provenance, never an anchor
   ---
   ```
 - **`confidence` is the note's floor — exactly one value.** When claims in one note differ, qualify them in the body, never on the `confidence:` line. **`status` is not confidence:** `superseded` = the conclusion was replaced (keep the note as the decision record and `[[link]]` its replacement); `falsified` = the thesis was tested and did not hold. `/brain:freshness` flags any other value in either field.
