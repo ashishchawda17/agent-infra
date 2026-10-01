@@ -59,6 +59,8 @@ assert_prefix() { local n="$1" p="$2" a="$3"; shift 3
   [[ "$a" == "$p"* ]] && pass "$n" || fail "$n" "expected prefix: [$p]" "actual: [$a]" "$@"; }
 assert_contains() { local n="$1" nd="$2" h="$3"; shift 3
   [[ "$h" == *"$nd"* ]] && pass "$n" || fail "$n" "expected to contain: [$nd]" "actual: [$h]" "$@"; }
+assert_not_contains() { local n="$1" nd="$2" h="$3"; shift 3
+  [[ "$h" != *"$nd"* ]] && pass "$n" || fail "$n" "expected NOT to contain: [$nd]" "actual: [$h]" "$@"; }
 
 first_line() { head -n 1 "$1" 2>/dev/null | tr -d '\r'; }
 evidence() {
@@ -317,6 +319,67 @@ BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"; VAULT="$BOX/not-a-vault"; mkdir -p "$VA
 run_allow
 assert_eq "allow/non-vault-exit-0" "0" "$STATUS" "$(evidence)"
 assert_prefix "allow/non-vault-verdict-OK" "ALLOWLIST: OK" "$(first_line "$BOX/out.txt")" "$(evidence)"
+
+# --- 16b. drafts advisory (INNOV-359) -------------------------------------
+# wiki/_drafts/ in the allowlist means /brain:save commits unreviewed drafts,
+# ingested chat summaries included, skipping /brain:promote. A warning only: exit
+# codes and verdict lines are unchanged, and nothing is repaired. On exit 0 it
+# must be on stdout — runtime.mjs returns only stdout for a passing script.
+DRAFTS_TOKEN="ALLOWLIST-DRAFTS: WARN"
+out_only() { tr -d '\r' <"$BOX/out.txt"; }
+err_only() { tr -d '\r' <"$BOX/err.txt"; }
+
+mk_vault "$FULL"$'\nprototypes/hub/my-account/\n'
+run_allow
+assert_eq "drafts/other-extra-exit-0" "0" "$STATUS" "$(evidence)"
+assert_not_contains "drafts/other-extra-no-advisory" "$DRAFTS_TOKEN" "$(out_all)" "$(evidence)"
+
+mk_vault "$FULL"$'\nwiki/_drafts/\n'
+run_allow
+assert_eq "drafts/listed-exit-0" "0" "$STATUS" "$(evidence)"
+assert_prefix "drafts/listed-verdict-still-first" "ALLOWLIST: OK" "$(first_line "$BOX/out.txt")" "$(evidence)"
+assert_contains "drafts/listed-advisory-on-stdout" "$DRAFTS_TOKEN" "$(out_only)" "$(evidence)"
+assert_contains "drafts/listed-names-entry" "'wiki/_drafts/'" "$(out_only)" "$(evidence)"
+assert_contains "drafts/listed-says-consequence" "/brain:promote" "$(out_only)" "$(evidence)"
+
+mk_vault "$FULL"$'\nwiki/_drafts/*.md\n'
+run_allow
+assert_contains "drafts/glob-advisory" "$DRAFTS_TOKEN" "$(out_only)" "$(evidence)"
+
+mk_vault "$FULL"$'\nwiki/_drafts/*.txt\n'
+run_allow
+assert_contains "drafts/non-md-glob-advisory" "$DRAFTS_TOKEN" "$(out_only)" "$(evidence)"
+
+mk_vault "$FULL"$'\nwiki/\n'
+run_allow
+assert_contains "drafts/parent-dir-advisory" "$DRAFTS_TOKEN" "$(out_only)" "$(evidence)"
+
+mk_vault "$FULL"$'\nwiki/_drafts.md\n'
+run_allow
+assert_not_contains "drafts/near-miss-no-advisory" "$DRAFTS_TOKEN" "$(out_all)" "$(evidence)"
+
+mk_vault "$(printf '%s\n' "$FULL" wiki/_drafts/ | sed 's/$/\r/')"
+run_allow
+assert_eq "drafts/crlf-exit-0" "0" "$STATUS" "$(evidence)"
+assert_contains "drafts/crlf-advisory" "$DRAFTS_TOKEN" "$(out_only)" "$(evidence)"
+
+mk_vault $'logs/\nwiki/_drafts/\n'
+run_allow
+assert_eq "drafts/incomplete-exit-1" "1" "$STATUS" "$(evidence)"
+assert_prefix "drafts/incomplete-verdict-still-first" "ALLOWLIST: INCOMPLETE" "$(first_line "$BOX/err.txt")" "$(evidence)"
+assert_contains "drafts/incomplete-advisory" "$DRAFTS_TOKEN" "$(err_only)" "$(evidence)"
+
+mk_vault $'logs/\nwiki/hot.md\nwiki/log.md\nwiki/_drafts/\n'
+run_allow --fix
+assert_eq "drafts/fix-exit-0" "0" "$STATUS" "$(evidence)"
+assert_contains "drafts/fix-advisory" "$DRAFTS_TOKEN" "$(out_only)" "$(evidence)"
+assert_contains "drafts/fix-keeps-entry" "wiki/_drafts/" "$(cat "$VAULT/.saveinclude")"
+
+# A glob entry covers a required path the way vault-commit.sh matches it; the
+# checker used to have no glob arm and reported a working vault INCOMPLETE.
+mk_vault "$(bash "$VAULT_COMMIT" --print-required 2>/dev/null | cut -f1 | grep -v '^graphify-out/')"$'\ngraphify-out/*\n'
+run_allow
+assert_eq "allow/glob-entry-covers-required" "0" "$STATUS" "$(evidence)"
 
 # ============================================ C. ANTI-DRIFT (INNOV-274) ===
 echo "--- C. the required set has exactly one definition ---"
