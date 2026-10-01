@@ -296,6 +296,48 @@ if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith
     process.exit(0);
   }
 
+  // --check-branches: doctor check 4d (INNOV-366). Advisory, always exit 0.
+  // Entries sharing one remote each carry their own `branch` and the publish gate
+  // reads each independently, so nothing makes them agree. Reports two things:
+  //   BRANCH-REJECTED <name> - a configured value branchOf() drops (the gate
+  //                            silently falls back to the detected default)
+  //   BRANCH-MISMATCH <remote> - entries on one normalized remote whose EFFECTIVE
+  //                            branches differ (absent or rejected = "(none)")
+  // Identity only, like --print-branches: no location lookup, no cache write.
+  if (argv.includes('--check-branches')) {
+    const repos = readJson(join(vault, 'repos.json'))?.repos;
+    if (!repos) {
+      console.log('BRANCHES: SKIPPED - no repos.json in vault');
+      process.exit(0);
+    }
+    const names = Object.keys(repos).sort();
+    const lines = [];
+    const byRemote = new Map();
+    for (const name of names) {
+      const spec = repos[name];
+      const raw = spec?.branch;
+      if (raw !== undefined && raw !== null && !branchOf(spec)) {
+        lines.push(`BRANCH-REJECTED ${name} - configured branch ${JSON.stringify(raw)} is not a plain ref name; the gate uses the detected default`);
+      }
+      const remote = normalizeRemote(spec?.remote);
+      if (!remote) continue;
+      if (!byRemote.has(remote)) byRemote.set(remote, []);
+      byRemote.get(remote).push(name);
+    }
+    let shared = 0;
+    for (const remote of [...byRemote.keys()].sort()) {
+      const group = byRemote.get(remote);
+      if (group.length < 2) continue;
+      shared++;
+      if (new Set(group.map((n) => branchOf(repos[n]))).size < 2) continue;
+      const list = group.map((n) => `${n}=${branchOf(repos[n]) || '(none: detected default)'}`).join(', ');
+      lines.push(`BRANCH-MISMATCH ${remote} - ${list}`);
+    }
+    if (!lines.length) lines.push(`BRANCHES: OK - ${names.length} entries, ${shared} shared remote${shared === 1 ? '' : 's'}`);
+    console.log(lines.join('\n'));
+    process.exit(0);
+  }
+
   const r = resolveRepos(vault, roots);
   if (!r.identity) {
     console.log(JSON.stringify({ error: 'no repos.json in vault — run with --seed first' }, null, 2));

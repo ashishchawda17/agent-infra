@@ -238,6 +238,55 @@ rm -rf "$BOX/repos/edge/graphify-out"
 st="$(run_sync "$BOX" store-hub)"
 assert_contains "missing-graph/skip-names-mirror" "$(cat "$BOX/err.txt")" "store-hub"
 
+echo "--- E. --check-branches: doctor check 4d (INNOV-366) ---"
+
+# Entries sharing one remote (the six hub-* entries) each carry their own
+# `branch`, and the publish gate reads each independently. A mismatch, or a value
+# branchOf() rejects, is reported here. Advisory only: always exit 0.
+CB="$TMPROOT/check-branches"
+mkdir -p "$CB"
+check_branches() { # repos-json-body -> "exit:output"
+  printf '{"repos":%s}\n' "$1" >"$CB/repos.json"
+  local out st
+  out="$(node "$RESOLVE" --vault "$CB" --check-branches 2>&1 | tr -d '\r')"
+  st=$?
+  printf '%s:%s' "$st" "$out"
+}
+
+# 14. One set, one absent, on the same remote: the stated ask.
+out="$(check_branches '{"hub-a":{"remote":"github.com/org/hub","subPath":"a","branch":"development"},"hub-b":{"remote":"github.com/org/hub","subPath":"b"}}')"
+assert_eq "check-branches/set-vs-absent" \
+  "0:BRANCH-MISMATCH github.com/org/hub - hub-a=development, hub-b=(none: detected default)" "$out"
+
+# 15. Two different configured branches; the remote written two ways is ONE remote.
+out="$(check_branches '{"x":{"remote":"git@github.com:Org/hub.git","branch":"main"},"y":{"remote":"https://github.com/org/hub","branch":"development"}}')"
+assert_eq "check-branches/different-branches-normalized-remote" \
+  "0:BRANCH-MISMATCH github.com/org/hub - x=main, y=development" "$out"
+
+# 16. A value branchOf() drops is named, and counts as (none) in the comparison,
+# because that is what the gate actually uses.
+out="$(check_branches '{"bad":{"remote":"github.com/org/hub","branch":"-x y"},"ok":{"remote":"github.com/org/hub"},"num":{"remote":"github.com/org/other","branch":7}}')"
+assert_eq "check-branches/rejected" \
+  "0:BRANCH-REJECTED bad - configured branch \"-x y\" is not a plain ref name; the gate uses the detected default
+BRANCH-REJECTED num - configured branch 7 is not a plain ref name; the gate uses the detected default" "$out"
+
+# 17. Negative controls: same remote + same branch, different remotes + different
+# branches, no branch keys at all. None of them warn.
+out="$(check_branches '{"a":{"remote":"github.com/org/hub","branch":"development"},"b":{"remote":"github.com/org/hub","branch":"development"},"c":{"remote":"github.com/org/other","branch":"main"},"d":{}}')"
+assert_eq "check-branches/consistent-is-ok" "0:BRANCHES: OK - 4 entries, 1 shared remote" "$out"
+out="$(check_branches '{"a":{"remote":"github.com/org/hub"},"b":{"remote":"github.com/org/hub"}}')"
+assert_eq "check-branches/no-branch-keys-is-ok" "0:BRANCHES: OK - 2 entries, 1 shared remote" "$out"
+
+# 18. CRLF repos.json (the vault is autocrlf).
+printf '{"repos":{"a":{"remote":"github.com/org/hub","branch":"development"},"b":{"remote":"github.com/org/hub"}}}\r\n' >"$CB/repos.json"
+out="$(node "$RESOLVE" --vault "$CB" --check-branches 2>&1 | tr -d '\r')"
+assert_contains "check-branches/crlf-repos-json" "$out" "BRANCH-MISMATCH github.com/org/hub"
+
+# 19. No repos.json: SKIPPED, never OK, still exit 0.
+rm -f "$CB/repos.json"
+out="$(node "$RESOLVE" --vault "$CB" --check-branches 2>&1)"
+assert_eq "check-branches/no-repos-json" "0:BRANCHES: SKIPPED - no repos.json in vault" "$?:$out"
+
 echo
 echo "$PASSED passed, $FAILED failed"
 [[ $FAILED -eq 0 ]]
