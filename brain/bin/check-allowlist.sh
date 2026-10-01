@@ -39,14 +39,19 @@
 #
 # --fix ONLY APPENDS. It never overwrites, never reorders, never removes, and
 # never rewrites from the template. A vault's allowlist is a customized
-# governance file — a team vault may carry `wiki/_drafts/`, which a template
-# overwrite would silently drop. Appending is the only safe edit, and each
-# appended entry is commented with which command needs it, so the next reader
-# knows why it is there.
+# governance file — a team vault may carry `prototypes/hub/my-account/`, which a
+# template overwrite would silently drop. Appending is the only safe edit, and
+# each appended entry is commented with which command needs it, so the next
+# reader knows why it is there.
 #
 # NOTE ON SCOPE: a MISSING required entry is a defect. An EXTRA entry the user
-# added is not — it is the whole point of a customizable allowlist. This script
-# only ever reports what is absent.
+# added is not — it is the whole point of a customizable allowlist. The one
+# exception is an entry covering `wiki/_drafts/` (INNOV-359): then /brain:save
+# commits unreviewed drafts, ingested chat summaries included, skipping the
+# /brain:promote review. That gets an advisory line — never a failure, never a
+# repair (removing a governance line is a human edit) — and the exit codes above
+# are unchanged. The advisory starts "ALLOWLIST-DRAFTS: WARN" and follows the
+# verdict line, on the verdict's stream.
 set -uo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -133,17 +138,36 @@ if [[ ${#ALLOW[@]} -eq 0 ]]; then
 fi
 
 # --- 3. which required paths are not covered? -------------------------------
-# "Covered" uses the SAME matching vault-commit.sh uses, so this check cannot
-# disagree with the thing it is predicting. A required path counts as covered
-# when an allowlist entry equals it, or is a directory prefix of it.
+# "Covered" uses the SAME matching vault-commit.sh uses (path_is_allowed_by),
+# so this check cannot disagree with the thing it is predicting: a directory
+# prefix, a glob, or an exact path / directory without the trailing slash.
 covers() { # allow_entry required_path
   local entry="$1" req="$2"
-  [[ "$entry" == "$req" ]] && return 0
   case "$entry" in
     */) [[ "$req" == "$entry"* ]] && return 0 ;;
-    *)  [[ "$req" == "$entry"/* ]] && return 0 ;;
+    *[\*\?\[]*)
+        # shellcheck disable=SC2053  # glob match on the RHS is the point
+        [[ "$req" == $entry ]] && return 0
+        # shellcheck disable=SC2053
+        [[ "$req" == $entry/* ]] && return 0
+        ;;
+    *)  [[ "$req" == "$entry" || "$req" == "$entry"/* ]] && return 0 ;;
   esac
   return 1
+}
+
+# INNOV-359: does any entry let /brain:save commit a draft? Probed with a file
+# path under wiki/_drafts/, so `wiki/`, `wiki/*` and `wiki/_drafts/*.md` count.
+DRAFTS_ENTRY=""
+for entry in "${ALLOW[@]}"; do
+  if covers "$entry" "wiki/_drafts/draft.md"; then DRAFTS_ENTRY="$entry"; break; fi
+done
+drafts_advisory() {
+  [[ -z "$DRAFTS_ENTRY" ]] && return 0
+  echo "ALLOWLIST-DRAFTS: WARN - entry '$DRAFTS_ENTRY' covers wiki/_drafts/"
+  echo "  /brain:save will commit every draft, ingested chat summaries included,"
+  echo "  without the /brain:promote review. No automatic repair: if that is not"
+  echo "  intended, remove the line from .saveinclude by hand, through a PR."
 }
 
 MISSING_PATHS=()
@@ -163,6 +187,7 @@ done
 # --- 4. all present -> OK ---------------------------------------------------
 if [[ ${#MISSING_PATHS[@]} -eq 0 ]]; then
   echo "ALLOWLIST: OK - .saveinclude covers all ${#REQ_PATHS[@]} required path(s) (${#ALLOW[@]} entries total)"
+  drafts_advisory
   exit 0
 fi
 
@@ -183,6 +208,7 @@ if [[ $FIX -eq 1 ]]; then
   echo "  Nothing was removed or reordered — existing entries are byte-identical."
   echo "  .saveinclude is a governance file and is NOT in the allowlist, so commit it"
   echo "  deliberately:  git -C \"$VAULT\" commit -o .saveinclude -m 'chore: allowlist required paths'"
+  drafts_advisory
   exit 0
 fi
 
@@ -197,5 +223,6 @@ fi
   echo "  to commit it. The work lands on disk; the commit never happens."
   echo "  Remedy — appends only, never rewrites your customized list:"
   echo "    BRAIN_ROOT=\"$VAULT\" bash \"${BASH_SOURCE[0]}\" --fix"
+  drafts_advisory
 } >&2
 exit 1

@@ -68,6 +68,7 @@ Resolve the vault as `$BRAIN_ROOT` (else cwd). **Pinned graphify version: `0.8.4
    ```
    - **Exit `0` (`ALLOWLIST: OK`) →** ✅.
    - **Exit `1` (`ALLOWLIST: INCOMPLETE`) →** ❌ → **R7**. The script names each missing path *and which command needs it*; relay that, don't re-derive it.
+   - **An `ALLOWLIST-DRAFTS: WARN` line (on either exit, INNOV-359) →** ⚠️ **advisory, no scripted repair** — an entry covers `wiki/_drafts/`, so `/brain:save` commits drafts (ingested chat summaries included) without the `/brain:promote` review. Relay it **verbatim**; it names the entry. Listing drafts can be deliberate, so never fail on it, and never remove the line for the user — that is a hand edit to a governance file, through a PR.
    - Skip if check 4 failed — bind a vault first. A non-vault dir reports OK/skipped.
 
    **The required set is not listed here, deliberately.** It comes from `vault-commit.sh --print-required`, which is where the enforcement lives. A second copy in this skill would be the INNOV-274 defect, drifting in the most useless direction: this checker would go stale exactly when a newly-committed path made it matter.
@@ -139,7 +140,7 @@ Resolve the vault as `$BRAIN_ROOT` (else cwd). **Pinned graphify version: `0.8.4
   ```bash
   BRAIN_ROOT=<vault> bash "${CLAUDE_PLUGIN_ROOT}/bin/check-allowlist.sh" --fix
   ```
-  **Appends only** — never overwrites, reorders, or removes, and never re-seeds from the template. A vault's `.saveinclude` is customized (one real vault carries `wiki/_drafts/`), and a template overwrite would silently drop those entries. Each appended line is commented with which command needs it. Show the diff and confirm before running — this is a governance file. Afterwards it must be **committed deliberately**: `.saveinclude` is not in the allowlist, so no brain command will ever commit it for you.
+  **Appends only** — never overwrites, reorders, or removes, and never re-seeds from the template. A vault's `.saveinclude` is customized (one real vault carries `prototypes/hub/my-account/`), and a template overwrite would silently drop those entries. Each appended line is commented with which command needs it. Show the diff and confirm before running — this is a governance file. Afterwards it must be **committed deliberately**: `.saveinclude` is not in the allowlist, so no brain command will ever commit it for you.
 - **R8 — vault .gitignore missing plugin-required entries.** Append them:
   ```bash
   BRAIN_ROOT=<vault> bash "${CLAUDE_PLUGIN_ROOT}/bin/check-gitignore.sh" --fix
