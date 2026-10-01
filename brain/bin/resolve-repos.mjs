@@ -310,6 +310,9 @@ if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith
       console.log('BRANCHES: SKIPPED - no repos.json in vault');
       process.exit(0);
     }
+    // Doctor relays these lines verbatim by first token, so a name or remote with
+    // a control character is quoted rather than allowed to forge a line.
+    const show = (s) => (/[\x00-\x1f\x7f]/.test(s) ? JSON.stringify(s) : s);
     const names = Object.keys(repos).sort();
     const lines = [];
     const byRemote = new Map();
@@ -317,7 +320,7 @@ if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith
       const spec = repos[name];
       const raw = spec?.branch;
       if (raw !== undefined && raw !== null && !branchOf(spec)) {
-        lines.push(`BRANCH-REJECTED ${name} - configured branch ${JSON.stringify(raw)} is not a plain ref name; the gate uses the detected default`);
+        lines.push(`BRANCH-REJECTED ${show(name)} - configured branch ${JSON.stringify(raw)} is not a plain ref name; the gate uses the detected default`);
       }
       const remote = normalizeRemote(spec?.remote);
       if (!remote) continue;
@@ -330,8 +333,8 @@ if (import.meta.url === `file://${process.argv[1]}` || process.argv[1]?.endsWith
       if (group.length < 2) continue;
       shared++;
       if (new Set(group.map((n) => branchOf(repos[n]))).size < 2) continue;
-      const list = group.map((n) => `${n}=${branchOf(repos[n]) || '(none: detected default)'}`).join(', ');
-      lines.push(`BRANCH-MISMATCH ${remote} - ${list}`);
+      const list = group.map((n) => `${show(n)}=${branchOf(repos[n]) || '(none: detected default)'}`).join(', ');
+      lines.push(`BRANCH-MISMATCH ${show(remote)} - ${list}`);
     }
     if (!lines.length) lines.push(`BRANCHES: OK - ${names.length} entries, ${shared} shared remote${shared === 1 ? '' : 's'}`);
     console.log(lines.join('\n'));

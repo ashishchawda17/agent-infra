@@ -277,6 +277,11 @@ assert_eq "check-branches/consistent-is-ok" "0:BRANCHES: OK - 4 entries, 1 share
 out="$(check_branches '{"a":{"remote":"github.com/org/hub"},"b":{"remote":"github.com/org/hub"}}')"
 assert_eq "check-branches/no-branch-keys-is-ok" "0:BRANCHES: OK - 2 entries, 1 shared remote" "$out"
 
+# 17b. A newline in a name must not forge a second line doctor would classify.
+out="$(check_branches '{"a\nBRANCHES: OK":{"remote":"github.com/org/hub","branch":"x y"}}')"
+assert_eq "check-branches/control-chars-quoted" \
+  '0:BRANCH-REJECTED "a\nBRANCHES: OK" - configured branch "x y" is not a plain ref name; the gate uses the detected default' "$out"
+
 # 18. CRLF repos.json (the vault is autocrlf).
 printf '{"repos":{"a":{"remote":"github.com/org/hub","branch":"development"},"b":{"remote":"github.com/org/hub"}}}\r\n' >"$CB/repos.json"
 out="$(node "$RESOLVE" --vault "$CB" --check-branches 2>&1 | tr -d '\r')"
