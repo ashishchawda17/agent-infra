@@ -40,6 +40,17 @@ Resolve the vault as `$BRAIN_ROOT` (else cwd). **Pinned graphify version: `0.8.4
    - **`SKIPPED - <reason>` →** ⚠️ "skipped — <reason>", never ✅. Skip if check 4 failed.
 
    Run it with no arguments to list every mirror's source the same way (`UNRESOLVED <name>` = no checkout for it on this machine; sync skips it).
+6b. **Mirror age (INNOV-354)** — how far each **published** mirror (`<vault>/graphify/<name>/graph.json`) is behind its source repo's reference branch: `branch` in `repos.json`, else the checkout's detected default — the same rule as `sync-graph.sh`'s publish gate. **Run the script, don't reason about it:**
+   ```bash
+   bash "${CLAUDE_PLUGIN_ROOT}/bin/check-mirror-source.sh" --behind   # same BRAIN_ROOT/REPOS_DIR pair as check 6
+   ```
+   One line per mirror; relay each **verbatim** — it names the branch it measured against and how that branch was chosen. Branch on the **first token**:
+   - **`CURRENT <name>` →** ✅ 0 commits behind.
+   - **`BEHIND <name>` →** ⚠️ N commits behind `origin/<branch>`. **Advisory, no scripted repair** — the remedy is a rebuild from that branch and a sync.
+   - **`OFF-BRANCH <name>` →** ⚠️ the build commit is not on `origin/<branch>` at all (a mirror published before the INNOV-353 gate existed). Same remedy.
+   - **`SKIPPED <name> - <reason>` →** ⚠️ "skipped — <reason>", never ✅ (no checkout on this machine, no or unknown `built_at_commit`, no `origin/<branch>`, shallow clone). Never a failure.
+
+   The count runs from the resolved path with `-- .`, so a `subPath` mirror counts only commits under its own root. It never fetches: it measures what the checkout last fetched. Skip if check 4 failed.
 7. **Brain plugin version drift** — check 3 does exactly this for graphify; this turns it on ourselves. **Run the script, don't reason about it:**
    ```bash
    bash "${CLAUDE_PLUGIN_ROOT}/bin/check-plugin-version.sh"

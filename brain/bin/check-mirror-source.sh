@@ -24,6 +24,16 @@
 #       # which mirror does <dir> feed? (doctor passes the cwd). Matched by PATH,
 #       # not by remote: a second clone of a mirrored repo feeds nothing unless it
 #       # is the checkout the resolver picked.
+#   BRAIN_ROOT=<vault> bash check-mirror-source.sh --behind [<name>...]
+#       # how far is each PUBLISHED mirror behind its reference branch? (INNOV-354,
+#       # doctor check 6b). Reads built_at_commit from the VAULT's
+#       # graphify/<name>/graph.json and counts, in the source checkout,
+#       #   git rev-list --count <built_at_commit>..origin/<branch> -- .
+#       # <branch> is repos.json's "branch", else the checkout's detected default:
+#       # lib/provenance.sh, the same rule sync-graph.sh's publish gate applies.
+#       # `-- .` runs from the resolved path, so a subPath mirror counts only the
+#       # commits under its own root; without a subPath it is the whole repo.
+#       # Never fetches: it measures what the checkout last fetched.
 #
 # Contract — ONE line per mirror on stdout; the FIRST TOKEN is the verdict:
 #   OK <name> <path>          source has graphify-out/graph.json
@@ -33,7 +43,13 @@
 #   UNMIRRORED <dir>          (--checkout) <dir> feeds no mirror: a local graph
 #                             is optional there (only the cwd query hook uses it)
 #   SKIPPED - <reason>        not measurable (no vault / no graphify/ / no node)
-# exit 1 => at least one NO-GRAPH line. exit 0 otherwise. WARN polarity: doctor
+# --behind lines:
+#   CURRENT <name> - ...      built at the reference branch's tip (0 behind)
+#   BEHIND <name> - ...       N commit(s) behind origin/<branch>
+#   OFF-BRANCH <name> - ...   build commit is not on origin/<branch> at all
+#   SKIPPED <name> - <reason> unverifiable (no checkout, no/unknown commit, no
+#                             origin ref, shallow clone): never fails doctor
+# exit 1 => at least one NO-GRAPH (or BEHIND / OFF-BRANCH) line. exit 0 otherwise. WARN polarity: doctor
 # relays the line, nothing is blocked. Read-only: the resolver cache is never
 # written (--print-paths without --write).
 set -uo pipefail
@@ -42,10 +58,12 @@ VAULT="${BRAIN_ROOT:-${CLAUDE_PROJECT_DIR:-$PWD}}"
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 CHECKOUT=""
+BEHIND=0
 NAMES=()
 while [[ $# -gt 0 ]]; do
   case "$1" in
     --checkout) CHECKOUT="${2:-}"; shift 2 || shift ;;
+    --behind)   BEHIND=1; shift ;;
     --)         shift; while [[ $# -gt 0 ]]; do NAMES+=("$1"); shift; done ;;
     *)          NAMES+=("$1"); shift ;;
   esac
@@ -123,6 +141,52 @@ report() { # name
   fi
 }
 
+# --behind: how old is what the vault already publishes? (INNOV-354)
+report_behind() { # name
+  local n="$1" src n_behind sha branch how _c
+  if [[ ! -d "$VAULT/graphify/$n" ]]; then
+    echo "NO-MIRROR $n - no graphify/$n/ in the vault"
+    return 0
+  fi
+  src="$(source_for "$n")"
+  if [[ ! -d "$src" ]]; then
+    echo "SKIPPED $n - no source checkout found on this machine (looked for '$src')"
+    return 0
+  fi
+  if [[ ! -f "$VAULT/graphify/$n/graph.json" ]]; then
+    echo "SKIPPED $n - graphify/$n/ has no graph.json"
+    return 0
+  fi
+  provenance_check "$VAULT/graphify/$n/graph.json" "$src" "$n"
+  case "$PROV_VERDICT" in
+    OK)
+      read -r sha branch how <<<"$PROV_DETAIL"
+      if ! n_behind="$(git -C "$src" rev-list --count "$sha..refs/remotes/origin/$branch" -- . 2>/dev/null)" || [[ -z "$n_behind" ]]; then
+        echo "SKIPPED $n - git could not count commits from $sha to origin/$branch ($how)"
+      elif [[ "$n_behind" == "0" ]]; then
+        echo "CURRENT $n - built at $sha, 0 commits behind origin/$branch ($how)"
+      else
+        [[ "$n_behind" == "1" ]] && _c="commit" || _c="commits"
+        echo "BEHIND $n - built at $sha, $n_behind $_c behind origin/$branch ($how); rebuild from $branch and sync to refresh it"
+        FROZEN=1
+      fi
+      ;;
+    REFUSED)
+      read -r sha branch how <<<"$PROV_DETAIL"
+      echo "OFF-BRANCH $n - built at $sha, which is not on origin/$branch ($how); a commit ahead of it is unmerged work and a squash-merged branch never enters its history. Check out $branch in $src, pull, rebuild the graph and sync"
+      FROZEN=1
+      ;;
+    *)
+      echo "SKIPPED $n - $PROV_DETAIL"
+      ;;
+  esac
+}
+if [[ $BEHIND -eq 1 ]]; then
+  # shellcheck source=lib/provenance.sh
+  source "$SCRIPT_DIR/lib/provenance.sh"
+  load_reference_branches
+fi
+
 MIRRORS=()
 for d in "$VAULT"/graphify/*/; do
   [[ -d "$d" ]] && MIRRORS+=("$(basename "$d")")
@@ -138,15 +202,19 @@ if [[ -n "$CHECKOUT" ]]; then
     echo "UNMIRRORED $CHECKOUT - feeds no vault mirror; graphify-out/ is optional here (only the cwd graph query hook uses it)"
     exit 0
   fi
-  report "$hit"
+  if [[ $BEHIND -eq 1 ]]; then report_behind "$hit"; else report "$hit"; fi
 elif [[ ${#NAMES[@]} -gt 0 ]]; then
-  for n in "${NAMES[@]}"; do report "$n"; done
+  for n in "${NAMES[@]}"; do
+    if [[ $BEHIND -eq 1 ]]; then report_behind "$n"; else report "$n"; fi
+  done
 else
   if [[ ${#MIRRORS[@]} -eq 0 ]]; then
     echo "SKIPPED - graphify/ under '$VAULT' holds no mirrors"
     exit 0
   fi
-  for n in "${MIRRORS[@]}"; do report "$n"; done
+  for n in "${MIRRORS[@]}"; do
+    if [[ $BEHIND -eq 1 ]]; then report_behind "$n"; else report "$n"; fi
+  done
 fi
 
 exit $FROZEN

@@ -751,6 +751,100 @@ run_mirror --checkout "$BOX"
 assert_eq "mirror/non-vault-exit-0" "0" "$STATUS" "$(evidence)"
 assert_prefix "mirror/non-vault-skipped" "SKIPPED" "$(first_line "$BOX/out.txt")" "$(evidence)"
 
+echo "--- I. check-mirror-source.sh --behind (INNOV-354, check 6b) ---"
+
+# The source checkout is a real git repo; origin/<branch> is a plain ref, so no
+# remote (and no network) is needed. repos.json is CRLF and configures
+# "branch": "development" — the line must name that, never main.
+gcommit() { # dir file
+  echo "$RANDOM" >>"$1/$2"
+  git -C "$1" add -A >/dev/null 2>&1
+  git -C "$1" -c user.email=t@example.invalid -c user.name=t commit -qm "c" >/dev/null 2>&1
+}
+mk_bvault() { # [subPath]
+  BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+  VAULT="$BOX/vault"; REPOS="$BOX/repos"; SRC="$REPOS/agent-infra"
+  mkdir -p "$VAULT/wiki" "$VAULT/graphify/brain-plugin" "$SRC/pkg"
+  git -C "$SRC" init -q -b trunk >/dev/null 2>&1
+  gcommit "$SRC" pkg/a
+  git -C "$SRC" update-ref refs/remotes/origin/development HEAD
+  if [[ -n "${1:-}" ]]; then
+    printf '{\r\n  "repos": {\r\n    "brain-plugin": { "subPath": "%s", "branch": "development" }\r\n  }\r\n}\r\n' "$1" >"$VAULT/repos.json"
+    printf '{ "brain-plugin": "%s" }\n' "$(native_path "$SRC/$1")" >"$VAULT/repos.local.json"
+  else
+    printf '{\r\n  "repos": {\r\n    "brain-plugin": { "branch": "development" }\r\n  }\r\n}\r\n' >"$VAULT/repos.json"
+    printf '{ "brain-plugin": "%s" }\n' "$(native_path "$SRC")" >"$VAULT/repos.local.json"
+  fi
+}
+built_at() { # sha  — the MIRRORED graph (the vault's copy) carries the commit
+  printf '{"built_at_commit": "%s", "nodes": [], "links": []}\n' "$1" >"$VAULT/graphify/brain-plugin/graph.json"
+}
+
+# --- 46. mirror at the reference branch's tip => CURRENT, 0 behind ----------
+mk_bvault
+built_at "$(git -C "$SRC" rev-parse HEAD)"
+run_mirror --behind
+assert_eq "behind/tip-exit-0" "0" "$STATUS" "$(evidence)"
+assert_prefix "behind/tip-verdict" "CURRENT brain-plugin " "$(first_line "$BOX/out.txt")" "$(evidence)"
+assert_contains "behind/tip-zero" "0 commits behind origin/development" "$(out_all)" "$(evidence)"
+assert_contains "behind/tip-says-configured" "configured in repos.json" "$(out_all)" "$(evidence)"
+
+# --- 47. N commits behind => BEHIND N (negative control for 46) -------------
+gcommit "$SRC" pkg/a; gcommit "$SRC" pkg/a
+git -C "$SRC" update-ref refs/remotes/origin/development HEAD
+run_mirror --behind brain-plugin
+assert_eq "behind/n-exit-1" "1" "$STATUS" "$(evidence)"
+assert_prefix "behind/n-verdict" "BEHIND brain-plugin " "$(first_line "$BOX/out.txt")" "$(evidence)"
+assert_contains "behind/n-count" "2 commits behind origin/development" "$(out_all)" "$(evidence)"
+assert_eq "behind/n-not-main" "0" "$(grep -c 'origin/main' "$BOX/out.txt" || true)" "$(evidence)"
+
+# --- 48. build commit not on the reference branch => OFF-BRANCH --------------
+git -C "$SRC" checkout -q -b feature >/dev/null 2>&1
+gcommit "$SRC" pkg/a
+built_at "$(git -C "$SRC" rev-parse HEAD)"
+run_mirror --behind
+assert_eq "behind/off-branch-exit-1" "1" "$STATUS" "$(evidence)"
+assert_prefix "behind/off-branch-verdict" "OFF-BRANCH brain-plugin " "$(first_line "$BOX/out.txt")" "$(evidence)"
+assert_contains "behind/off-branch-wording" "which is not on origin/development" "$(out_all)" "$(evidence)"
+
+# --- 49. unverifiable cases => SKIPPED, exit 0 -------------------------------
+built_at "0123456789abcdef0123456789abcdef01234567"
+run_mirror --behind
+assert_eq "behind/unknown-commit-exit-0" "0" "$STATUS" "$(evidence)"
+assert_prefix "behind/unknown-commit-skipped" "SKIPPED brain-plugin " "$(first_line "$BOX/out.txt")" "$(evidence)"
+printf '{"nodes": [], "links": []}\n' >"$VAULT/graphify/brain-plugin/graph.json"
+run_mirror --behind
+assert_eq "behind/no-commit-exit-0" "0" "$STATUS" "$(evidence)"
+assert_prefix "behind/no-commit-skipped" "SKIPPED brain-plugin " "$(first_line "$BOX/out.txt")" "$(evidence)"
+built_at "$(git -C "$SRC" rev-parse trunk)"
+git -C "$SRC" update-ref -d refs/remotes/origin/development
+run_mirror --behind
+assert_eq "behind/no-origin-exit-0" "0" "$STATUS" "$(evidence)"
+assert_prefix "behind/no-origin-skipped" "SKIPPED brain-plugin " "$(first_line "$BOX/out.txt")" "$(evidence)"
+assert_contains "behind/no-origin-reason" "no origin/development" "$(out_all)" "$(evidence)"
+mkdir -p "$VAULT/graphify/gone"
+run_mirror --behind gone
+assert_eq "behind/no-checkout-exit-0" "0" "$STATUS" "$(evidence)"
+assert_prefix "behind/no-checkout-skipped" "SKIPPED gone " "$(first_line "$BOX/out.txt")" "$(evidence)"
+
+# --- 50. no "branch" configured => the checkout's detected default, said so --
+mk_bvault
+built_at "$(git -C "$SRC" rev-parse HEAD)"
+printf '{\r\n  "repos": {\r\n    "brain-plugin": {}\r\n  }\r\n}\r\n' >"$VAULT/repos.json"
+git -C "$SRC" symbolic-ref refs/remotes/origin/HEAD refs/remotes/origin/development
+run_mirror --behind
+assert_prefix "behind/default-verdict" "CURRENT brain-plugin " "$(first_line "$BOX/out.txt")" "$(evidence)"
+assert_contains "behind/default-says-detected" "the detected default" "$(out_all)" "$(evidence)"
+
+# --- 51. subPath mirror: the count is scoped to the mirror's own root --------
+mk_bvault pkg
+built_at "$(git -C "$SRC" rev-parse HEAD)"
+gcommit "$SRC" outside; gcommit "$SRC" outside; gcommit "$SRC" pkg/a
+git -C "$SRC" update-ref refs/remotes/origin/development HEAD
+run_mirror --behind
+assert_prefix "behind/subpath-verdict" "BEHIND brain-plugin " "$(first_line "$BOX/out.txt")" "$(evidence)"
+assert_contains "behind/subpath-scoped-count" "1 commit behind origin/development" "$(out_all)" "$(evidence)"
+
 fi
 
 echo
