@@ -156,17 +156,20 @@ covers() { # allow_entry required_path
   return 1
 }
 
-# INNOV-359: does any entry let /brain:save commit a draft? Probed with a file
-# path under wiki/_drafts/, so `wiki/`, `wiki/*` and `wiki/_drafts/*.md` count.
+# INNOV-359: does any entry let /brain:save commit a draft? An entry that covers
+# a probe path under wiki/_drafts/ (`wiki/`, `wiki/*`, `wiki/_drafts`), or any
+# entry written under wiki/_drafts/ itself, whatever file it names.
 DRAFTS_ENTRY=""
 for entry in "${ALLOW[@]}"; do
-  if covers "$entry" "wiki/_drafts/draft.md"; then DRAFTS_ENTRY="$entry"; break; fi
+  if covers "$entry" "wiki/_drafts/draft.md" || [[ "$entry" == wiki/_drafts/* ]]; then
+    DRAFTS_ENTRY="$entry"; break
+  fi
 done
 drafts_advisory() {
   [[ -z "$DRAFTS_ENTRY" ]] && return 0
   echo "ALLOWLIST-DRAFTS: WARN - entry '$DRAFTS_ENTRY' covers wiki/_drafts/"
-  echo "  /brain:save will commit every draft, ingested chat summaries included,"
-  echo "  without the /brain:promote review. No automatic repair: if that is not"
+  echo "  /brain:save will commit the drafts it matches, ingested chat summaries"
+  echo "  included, without the /brain:promote review. No automatic repair: if that is not"
   echo "  intended, remove the line from .saveinclude by hand, through a PR."
 }
 

@@ -346,6 +346,10 @@ mk_vault "$FULL"$'\nwiki/_drafts/*.md\n'
 run_allow
 assert_contains "drafts/glob-advisory" "$DRAFTS_TOKEN" "$(out_only)" "$(evidence)"
 
+mk_vault "$FULL"$'\nwiki/_drafts/*.txt\n'
+run_allow
+assert_contains "drafts/non-md-glob-advisory" "$DRAFTS_TOKEN" "$(out_only)" "$(evidence)"
+
 mk_vault "$FULL"$'\nwiki/\n'
 run_allow
 assert_contains "drafts/parent-dir-advisory" "$DRAFTS_TOKEN" "$(out_only)" "$(evidence)"
