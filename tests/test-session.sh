@@ -331,6 +331,18 @@ git -C "$VAULT" branch "brain/save-$(today)-2" >/dev/null 2>&1
 run_session --start save
 assert_eq "autobranch/second-collision-suffixed" "brain/save-$(today)-3" "$(cur_branch)" "$(evidence)"
 
+# --- 6b. a name taken on the REMOTE is a collision too (INNOV-333) ---------
+# Another author's open PR branch exists only as origin/brain/save-<date>. Reusing
+# the name sent a push onto their PR branch and merged the wrong save (INNOV-313).
+# Case 2 is the negative control: with no ref at all the bare name is used.
+sb_new "main"
+GH_PATH="$GH_NONE"
+git -C "$VAULT" update-ref "refs/remotes/origin/brain/save-$(today)" "$(head_sha)"
+run_session --start save
+assert_eq "autobranch/remote-collision-exit-0" "0" "$STATUS" "$(evidence)"
+assert_eq "autobranch/remote-collision-suffixed" "brain/save-$(today)-2" "$(cur_branch)" "$(evidence)"
+assert_eq "autobranch/remote-collision-pin-matches" "  pin: brain/save-$(today)-2:$(head_sha)" "$(nth_line "$BOX/out.txt" 2)" "$(evidence)"
+
 echo "--- C. concurrency: the 2026-08-05 incident ---"
 
 # --- 7. protected branch + a live foreign session => REFUSE ---------------

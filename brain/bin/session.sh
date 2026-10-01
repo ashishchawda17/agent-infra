@@ -658,7 +658,11 @@ if branch_is_protected "$CUR_BRANCH"; then
   DATE_TAG="$(date -u +%F 2>/dev/null || echo undated)"
   NEW_BRANCH="brain/$SLUG-$DATE_TAG"
   n=2
-  while git -C "$VAULT" rev-parse --verify --quiet "refs/heads/$NEW_BRANCH" >/dev/null 2>&1; do
+  # A name taken only on origin is taken too: it is another author's PR branch, and
+  # reusing it pushes onto their PR (INNOV-333). ponytail: only as fresh as the last
+  # fetch (resume's `git fetch --prune`); vault-commit's open-PR guard is the backstop.
+  while git -C "$VAULT" rev-parse --verify --quiet "refs/heads/$NEW_BRANCH" >/dev/null 2>&1 ||
+    git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/origin/$NEW_BRANCH" >/dev/null 2>&1; do
     NEW_BRANCH="brain/$SLUG-$DATE_TAG-$n"
     n=$((n + 1))
   done
