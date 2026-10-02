@@ -46,32 +46,14 @@ F="$(mktemp)"
 node "${CLAUDE_PLUGIN_ROOT}/bin/freshness.mjs" --json > "$F"   # writes no logs/ report
 ```
 
-Keep only the three judgment kinds. Drop every finding in a `wiki/_drafts/` note (drafts are `/brain:promote`'s queue), and drop notes already marked `status: superseded` or `falsified` (they already say what is wrong). Group by note: a note that is both stale and low-confidence becomes **one** `claim` item with one check, not two. Order: dead links first (cheapest), then claims, stale oldest first, low-confidence-only last. Take the first `--max` items. This selector is the queue definition: step 5's re-check runs it again. Use `node -e`, not `jq`, which is not assumed:
+Keep only the three judgment kinds, as a queue. `verify-findings.mjs queue` is the selector: it drops `wiki/_drafts/` findings (drafts are `/brain:promote`'s queue) and notes already marked `status: superseded` or `falsified`, folds a note that is both stale and low-confidence into **one** `claim` item, and orders dead links first (cheapest), then claims stale-oldest-first, low-confidence-only last. It prints one JSON object per line: up to `--max` **work** items, then every **carried** item. An item is carried when `logs/verify-findings.json` holds a verdict for it, the note is unchanged since (same git blob; line endings alone do not count), and the verdict is at most 30 days old (`--ttl-days`). Carried items have a `"carried": {verdict, subtype, reason, date, pr}` field, are not counted against `--max`, and get **no** subagent: list them in the plan and the PR as "carried over". This selector is the queue definition: step 5's re-check runs it again.
 
 ```bash
 MAX=25   # the --max argument, when given
-node -e '
-  const fs = require("fs"), path = require("path");
-  const [, file, max, vault] = process.argv;
-  const a = JSON.parse(fs.readFileSync(file, "utf8"));
-  const frontmatter = (n) => fs.readFileSync(path.join(vault, n), "utf8").split("---")[1] || "";
-  const marked = (n) => /^status: *(superseded|falsified)/m.test(frontmatter(n));
-  const draft = (n) => n.startsWith("wiki/_drafts/");
-  const dead = a.filter((f) => f.kind === "dead-link" && !draft(f.note));
-  const claims = new Map();
-  for (const f of a) {
-    if ((f.kind !== "stale" && f.kind !== "low-confidence") || draft(f.note) || marked(f.note)) continue;
-    const c = claims.get(f.note) || { kind: "claim", note: f.note, stale: null, low: false };
-    if (f.kind === "stale") c.stale = { date: f.date, age: f.age }; else c.low = true;
-    claims.set(f.note, c);
-  }
-  const age = (c) => (c.stale ? c.stale.age : -1);
-  const queue = [...dead, ...[...claims.values()].sort((x, y) => age(y) - age(x))];
-  for (const f of queue.slice(0, Number(max) || 25)) console.log(JSON.stringify(f));
-' "$F" "$MAX" "${BRAIN_ROOT:-$PWD}"
+node "${CLAUDE_PLUGIN_ROOT}/bin/verify-findings.mjs" queue "$F" --max "$MAX"   # from the vault root, or with BRAIN_ROOT=<vault> set
 ```
 
-Nothing left → report "judgment queue empty", close the session (step 7), stop.
+No work items left → report "judgment queue empty" (with the carried count), close the session (step 7), stop.
 
 ### 2. Resolve anchors first; skip what cannot resolve
 
@@ -82,7 +64,7 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/check-anchors.mjs" <note.md> [...]
 node "${CLAUDE_PLUGIN_ROOT}/bin/resolve-repos.mjs" --print-paths      # repo name<TAB>local checkout
 ```
 
-A note whose anchor is **broken**, **unverifiable** (no checkout, unknown prefix, unfetched pinned rev, git-ignored), **external** (PR/URL), or absent goes straight to **could-not-tell** with the gate's reason. Do not dispatch a subagent for it. `check-anchors.mjs` is the same resolver freshness uses, so do not second-guess its verdict by reading the path yourself.
+A note whose anchor is **broken**, **unverifiable** (no checkout, unknown prefix, unfetched pinned rev, git-ignored), **external** (PR/URL), or absent goes straight to **could-not-tell** with the gate's reason and the matching subtype: broken or wrong-repo → `anchor-broken`, no `source:` → `anchor-missing`, `source-untracked` → `anchor-untracked`, anything unverifiable (including a PR/URL) → `anchor-unverifiable`. Do not dispatch a subagent for it. `check-anchors.mjs` is the same resolver freshness uses, so do not second-guess its verdict by reading the path yourself.
 
 **Read code on the reference branch, never a working tree.** The reference branch is the repo's `branch` in `repos.json` when that field is present, else the checkout's detected default (`git symbolic-ref refs/remotes/origin/HEAD`, and when that is missing, check the host with `gh repo view --json defaultBranchRef`). `git fetch` it first, then read with `git -C <checkout> show origin/<branch>:<path>` and search with `git -C <checkout> grep <pattern> origin/<branch> -- <path>`. Another session may have that checkout dirty or on a feature branch.
 
@@ -99,10 +81,10 @@ A note an open PR already edits is dropped from this batch and listed as blocked
 
 ### 4. Dispatch one subagent per finding
 
-Subagents are **read-only**: they return a verdict and never edit a file. This session applies every write (step 5), so the vault and its git index have exactly one writer. Dispatch in parallel. Each gets the note's path, its `source:` anchor, the resolved checkout and reference branch, and one of these briefs:
+Subagents are **read-only**: they return a verdict and never edit a file. This session applies every write (step 5), so the vault and its git index have exactly one writer. Dispatch in parallel. Each gets the note's path, its `source:` anchor, the resolved checkout, the reference branch and its SHA (`git -C <checkout> rev-parse origin/<branch>`), and one of these briefs:
 
-- **Claim (stale and/or low-confidence note):** "Read the note. Read the anchored code on `origin/<branch>` with `git show` / `git grep`. Decide whether each factual claim the note makes still holds. Return exactly one JSON object: `{\"note\": \"...\", \"verdict\": \"holds\" | \"superseded\" | \"falsified\" | \"cannot-tell\", \"reason\": \"<one line citing file:line on origin/<branch>>\"}`. `holds` only if every claim holds. `superseded` means the code once said this and has since changed. `falsified` means the code does not and did not say this. `cannot-tell` means the code does not settle it either way. When in doubt, answer `cannot-tell`."
-- **Dead link:** "Note `<note>` links `[[<target>]]`, which resolves to nothing. Search `wiki/**/*.md` (including `wiki/_drafts/`) for a note that is plainly the same subject under another name: a renamed basename, an `aliases:` entry, a heading, an `id:`. Return `{\"note\": \"...\", \"target\": \"...\", \"verdict\": \"found\" | \"draft\" | \"none\", \"replacement\": \"<basename>\", \"reason\": \"<one line>\"}`. `found` only for one unambiguous candidate outside `wiki/_drafts/`. `draft` when the one unambiguous candidate is a draft. Two plausible candidates is `none`."
+- **Claim (stale and/or low-confidence note):** "Read the note. Read the anchored code on `origin/<branch>` (at `<sha>`) with `git show` / `git grep`. Decide whether each factual claim the note makes still holds. Return exactly one JSON object: `{\"note\": \"...\", \"kind\": \"claim\", \"verdict\": \"holds\" | \"superseded\" | \"falsified\" | \"cannot-tell\", \"reason\": \"<one line citing file:line on origin/<branch>>\", \"evidence\": {\"refs\": [\"<repo/path:line>\", ...], \"branch\": \"<branch>\", \"sha\": \"<sha>\"}}`. `holds` only if every claim holds. `superseded` means the code once said this and has since changed. `falsified` means the code does not and did not say this. `cannot-tell` means the code does not settle it either way, and then add `\"subtype\"`: `line-drift` (the claim holds but the cited lines moved; add `\"drift\": [{\"old\": \"<path:line>\", \"new\": \"<path:line>\"}]`), `side-claim` (the main claim holds, a secondary one does not), or `external-claim` (it rests on something outside the code: a service, a person, a dashboard). When in doubt, answer `cannot-tell`."
+- **Dead link:** "Note `<note>` links `[[<target>]]`, which resolves to nothing. Search `wiki/**/*.md` (including `wiki/_drafts/`) for a note that is plainly the same subject under another name: a renamed basename, an `aliases:` entry, a heading, an `id:`. Return `{\"note\": \"...\", \"kind\": \"dead-link\", \"target\": \"...\", \"verdict\": \"found\" | \"draft\" | \"none\", \"replacement\": \"<basename>\", \"reason\": \"<one line>\"}`. `found` only for one unambiguous candidate outside `wiki/_drafts/`. `draft` when the one unambiguous candidate is a draft. Two plausible candidates is `none`."
 
 ### 5. Show the plan, then apply
 
@@ -118,7 +100,7 @@ Show the full plan compactly as the four-part table (step 6's format) plus block
 | dead link `draft` | none. List it as "target exists only as draft `<replacement>`; promote it first". A trusted note never links staging | everything |
 | dead link `none` | none. List it | everything |
 
-Preserve each file's line endings (vault notes are often CRLF) and any trailing YAML comment on an edited line. Then **re-run step 1** (scan plus selector, not the raw scan). Every note you bumped, status-marked or relinked must be gone from the queue: status-marked notes are still `stale` in the raw `--json`, and the selector is what drops them. Only could-not-tell items may remain, and the raw `--json` may show no dead link that was not there before (a typo'd replacement creates one). Fix before shipping.
+Preserve each file's line endings (vault notes are often CRLF) and any trailing YAML comment on an edited line. Then **re-run step 1** (scan plus selector, not the raw scan). Every note you bumped, status-marked or relinked must be gone from the queue: status-marked notes are still `stale` in the raw `--json`, and the selector is what drops them. Only this run's could-not-tell items (as work items, since they are not recorded yet) and earlier runs' carried items may remain, and the raw `--json` may show no dead link that was not there before (a typo'd replacement creates one). Fix before shipping.
 
 ### 6. Commit and open one PR
 
@@ -143,7 +125,15 @@ The PR body carries one table in four parts. The **could-not-tell** part is the 
 | Could not tell | wiki/w.md | anchor unverifiable: repo `foo` not checked out | check-anchors.mjs |
 ```
 
-Add the before/after judgment-queue counts, the blocked notes (open-PR overlap), and how many findings were left in the queue by `--max`.
+Add the before/after judgment-queue counts, the carried-over items (one line each: note, stored verdict, date, PR), the blocked notes (open-PR overlap), and how many findings were left in the queue by `--max`.
+
+Then **record this run's verdicts**, one per judged item: every subagent verdict, plus each step-2 anchor could-not-tell (`{"note", "kind": "claim", "verdict": "cannot-tell", "subtype": "anchor-…", "reason"}`). Carried and blocked items are not judged this run, so they get no line. Write them as JSON lines to a temp file and pass the post-apply scan from step 5:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/verify-findings.mjs" record "$F" <verdicts.jsonl> --pr <n>   # omit --pr when no PR was opened
+```
+
+It refuses the whole batch (nothing written) on a bad verdict, kind or subtype, a `cannot-tell` without a subtype, or `line-drift` without `drift` pairs; fix the line and re-run. It stamps each record with the note's blob, today's date and the PR, and drops earlier records whose item has left the queue. `logs/verify-findings.json` stays uncommitted on this branch: it is on `.saveinclude` (`logs/`), so the next `/brain:save` commits it. Never add it to `--pr-paths`. On an early exit after step 5's edits (a refused commit), still record, without `--pr`. A plan the user declined at step 5 is not recorded: nothing was applied, and a stored `holds` would carry a still-stale note forever.
 
 ### 7. Close the session record
 
@@ -155,6 +145,6 @@ Run it once the PR is open, or on any early exit (empty queue, no approval, a re
 
 ## Notes
 
-- Idempotent: a re-run skips everything it verified (no longer stale) and everything it gave a `status:` (step 1 drops marked notes), and re-lists could-not-tell.
+- Idempotent: a re-run skips everything it verified (no longer stale) and everything it gave a `status:` (step 1 drops marked notes), and carries unchanged could-not-tell items over from `logs/verify-findings.json` instead of re-judging them.
 - `last_verified` means "re-checked against source". Bumping it without reading the code is the one failure this skill exists to prevent. A `cannot-tell` is a correct answer, and a bump for a claim the code contradicts is not.
-- Writes are limited to trusted notes' frontmatter, one status line per changed note, `[[link]]` text, and the vault git branch. No `logs/` report is written.
+- Writes are limited to trusted notes' frontmatter, one status line per changed note, `[[link]]` text, the vault git branch, and `logs/verify-findings.json` (one record per judged item; `/brain:save` commits it, and later tidy/revise steps and the dashboard read it).
