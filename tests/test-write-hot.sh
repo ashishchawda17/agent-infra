@@ -381,6 +381,34 @@ SESSION_ENV=""
 assert_eq "session/invalid-id-refused" "1" "$STATUS" "$(evidence)"
 assert_eq "session/invalid-id-writes-no-pin" "0"   "$(find "$BOX" -name '*.pin' 2>/dev/null | grep -c . || true)" "$(evidence)"
 
+echo "--- F. --pin reaps other sessions' stale pins (INNOV-345) ---"
+
+# --- 22. a crashed session's pin older than a day is removed; the rest stay -
+# Fixtures are CRLF (the vault is autocrlf). 200001010000 is decades old, so the
+# day threshold is never borderline. --status runs first as the negative
+# control: it must reap nothing, so the stale pin is still there for --pin.
+sb_new "original hot content"
+mkdir -p "$VAULT/.brain"
+printf 'deadbeef\t2000-01-01T00:00:00\r\n' >"$VAULT/.brain/hot-crashed.pin"
+printf 'cafef00d\t2000-01-01T00:00:00\r\n' >"$VAULT/.brain/hot-live.pin"
+printf 'feedface\t2000-01-01T00:00:00\r\n' >"$VAULT/.brain/hot.pin"
+touch -t 200001010000 "$VAULT/.brain/hot-crashed.pin" "$VAULT/.brain/hot.pin"
+SESSION_ENV="BRAIN_SESSION_ID=sess-1"
+run_guard --status
+assert_eq "reap/status-reaps-nothing" "yes" \
+  "$([[ -f "$VAULT/.brain/hot-crashed.pin" ]] && echo yes || echo no)" "$(evidence)"
+run_guard --pin
+SESSION_ENV=""
+assert_eq "reap/pin-exit-0" "0" "$STATUS" "$(evidence)"
+assert_eq "reap/stale-other-pin-removed" "no" \
+  "$([[ -e "$VAULT/.brain/hot-crashed.pin" ]] && echo yes || echo no)" "$(evidence)"
+assert_eq "reap/fresh-other-pin-kept" "yes" \
+  "$([[ -f "$VAULT/.brain/hot-live.pin" ]] && echo yes || echo no)" "$(evidence)"
+assert_eq "reap/shared-hot-pin-kept" "yes" \
+  "$([[ -f "$VAULT/.brain/hot.pin" ]] && echo yes || echo no)" "$(evidence)"
+assert_eq "reap/own-pin-written" "yes" \
+  "$([[ -f "$VAULT/.brain/hot-sess-1.pin" ]] && echo yes || echo no)" "$(evidence)"
+
 # ------------------------------------------------------------------ done ---
 echo
 echo "$PASSED passed, $FAILED failed"

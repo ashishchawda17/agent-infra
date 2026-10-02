@@ -46,7 +46,8 @@
 # THE PIN lives at <vault>/.brain/hot.pin, or .brain/hot-<id>.pin when
 # BRAIN_SESSION_ID / CLAUDE_CODE_SESSION_ID / GROK_SESSION_ID names the session
 # (so one session's write cannot advance another's pin; session.sh --end removes
-# that per-session file, never the shared hot.pin) — machine-local state about an
+# that per-session file and --pin reaps ones idle a day, never the shared
+# hot.pin) — machine-local state about an
 # in-flight command, never committed (the vault .gitignore template ignores
 # .brain/). It holds the hash and when it was taken. A hot.md that does not exist
 # yet pins as the literal `absent`, so the first-ever write is guarded too: if
@@ -148,6 +149,12 @@ if [[ "$MODE" == "--pin" ]]; then
       "  guard exists to prevent. Install coreutils, or edit hot.md by hand."
   fi
   printf '%s\t%s\n' "$h" "$(date +%FT%T 2>/dev/null || echo unknown)" >"$PIN_FILE"
+  # Reap other sessions' per-session pins untouched for a day: --end removes its
+  # own, but a crashed session never runs --end (INNOV-345). The shared hot.pin
+  # never matches hot-*.pin, and our own was just rewritten so it is never old.
+  # A day is generous: a live session that pins and waits that long before
+  # --write gets a "no pin" refusal, which is safe.
+  find "$PIN_DIR" -maxdepth 1 -type f -name 'hot-*.pin' -mmin +1440 -delete 2>/dev/null || true
   if [[ "$h" == "absent" ]]; then
     echo "HOT-WRITE: OK - pinned wiki/hot.md as absent (no file yet); a first write is guarded too"
   else
