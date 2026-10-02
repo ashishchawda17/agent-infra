@@ -230,10 +230,13 @@ function readReportMembers(text) {
 
 // Fraction of a heading's stated members that must still be in graph.json's
 // cluster of that id for the heading's name to describe a cluster that exists.
-// ponytail: flat 0.5 over the <=12 members a report samples. Measured across 19
-// real mirrors: current ones score 1.0 almost everywhere, the known-stale
-// repo-a scores below 0.5 on 418 of 433 headings — nothing sits near
-// the line. Make it a per-mirror knob only if a mirror ever lands there.
+// ponytail: flat 0.5. Measured across 19 real mirrors with sample containment:
+// current ones scored 1.0 almost everywhere, the known-stale repo-a below 0.5 on
+// 418 of 433 headings. Under fit()'s size-scaled estimate (INNOV-346, measured
+// 2026-10-02 on personal-brain) some headings DO sit near the line:
+// spike-legends c9 0.50, volleyball-stats c133 0.49, sports-management c25 0.48
+// and c5 0.47. Whether that warrants a per-mirror knob is a human call; the
+// anchor replaces the estimate for any name that has been through --apply.
 const STALE_OVERLAP = 0.5;
 
 // Does this id's heading still describe the cluster graph.json holds?
