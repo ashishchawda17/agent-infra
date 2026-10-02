@@ -317,6 +317,51 @@ else
   fail "note-alias/json-dead-only-control" "got: [$(cat "$BOX/out.json")]"
 fi
 
+# --- 10. --json marks which findings count toward the total (INNOV-374) ----
+# Every finding carries a boolean `counted`; the counted ones sum to the
+# Markdown's "N item(s) to review". Singleton tags, unverifiable anchors and
+# low confidence are listed but not counted (negative control). CRLF vault.
+BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+VAULT="$BOX/vault"
+mkdir -p "$VAULT/wiki" "$VAULT/chats/demo"
+git init --quiet "$VAULT"
+printf 'chats/\n' >"$VAULT/.gitignore"
+printf 'digest\n' >"$VAULT/chats/demo/d1.md"
+printf -- '---\r\nid: a-note\r\ntags: [x, lonely]\r\nlast_verified: 2020-01-01\r\nconfidence: low\r\nsource: chats/demo/d1.md\r\n---\r\n# A\r\nSee [[b-note]] and [[Gone Target]].\r\n' >"$VAULT/wiki/a-note.md"
+printf -- '---\r\nid: b-note\r\ntags: [x]\r\nlast_verified: 2099-01-01\r\nconfidence: high\r\n---\r\n# B\r\nSee [[a-note]].\r\n' >"$VAULT/wiki/b-note.md"
+( cd "$BOX" && BRAIN_ROOT="$VAULT" node "$FRESH" --stdout ) >"$BOX/out.md" 2>/dev/null
+( cd "$BOX" && BRAIN_ROOT="$VAULT" node "$FRESH" --json ) >"$BOX/out.json" 2>/dev/null
+# counted-matches-total <label> <json> <md>: every finding has a boolean
+# `counted`, and the counted ones equal the Markdown total (Clean = 0).
+counted_matches_total() {
+  local want got
+  want="$(sed -n 's/^⚠️ \([0-9]*\) item(s) to review\.$/\1/p' "$3")"
+  grep -qF '✅ Clean — no issues found.' "$3" && want=0
+  got="$(node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+    if(!a.every(f=>typeof f.counted==="boolean")) { process.stdout.write("non-boolean"); process.exit(0); }
+    process.stdout.write(String(a.filter(f=>f.counted).length));' "$2" 2>/dev/null || echo ERR)"
+  if [[ -n "$want" && "$got" == "$want" ]]; then
+    pass "counted/$1-matches-total"
+  else
+    fail "counted/$1-matches-total" "json counted [$got], markdown total [$want]" "json: [$(head -c 600 "$2")]"
+  fi
+}
+counted_matches_total control "$BOX/out.json" "$BOX/out.md"
+( cd "$TMPROOT" && BRAIN_ROOT="$VAULT_ENUM" node "$FRESH" --stdout ) >"$TMPROOT/enum.md" 2>/dev/null
+counted_matches_total enum "$TMPROOT/enum.json" "$TMPROOT/enum.md"
+( cd "$TMPROOT" && BRAIN_ROOT="$VAULT_IGN" node "$FRESH" --stdout ) >"$TMPROOT/ign.md" 2>/dev/null
+counted_matches_total ign "$TMPROOT/ign.json" "$TMPROOT/ign.md"
+# kind | expected counted — each kind must be present in the control box.
+for row in dead-link:true stale:true singleton-tag:false unverifiable-source:false low-confidence:false; do
+  kind="${row%%:*}"; want="${row#*:}"
+  if node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).filter(f=>f.kind===process.argv[2]);
+    process.exit(a.length>0&&a.every(f=>f.counted===(process.argv[3]==="true"))?0:1)' "$BOX/out.json" "$kind" "$want" 2>/dev/null; then
+    pass "counted/$kind-$want"
+  else
+    fail "counted/$kind-$want" "got: [$(cat "$BOX/out.json")]"
+  fi
+done
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"
