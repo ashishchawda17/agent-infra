@@ -37,7 +37,7 @@ Resolve the vault root as `$BRAIN_ROOT` (else the current project dir / cwd).
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/bin/label-communities.mjs" --digest [repo ...]
    ```
-   Per repo it prints: `preserved` (existing names — untouchable), `derived` (tiny tail communities auto-named from their dominant source file), and `batches` — the communities **you** must name, largest first, ≤100 per batch, each line like:
+   Per repo it prints: `preserved` (existing names that still describe their cluster — untouchable; a kept name whose members scattered, or a path name like `docs/X.md` whose file left the cluster, lands back in `batches` instead), `derived` (tiny tail communities auto-named from their dominant source file), and `batches` — the communities **you** must name, largest first, ≤100 per batch, each line like:
    ```
    Community 11 (95 nodes): _adjustTab, _appliedGiftCards, CheckoutBloc, ... | files: presentation/checkout/bloc/checkout_bloc.dart
    ```
@@ -49,7 +49,7 @@ Resolve the vault root as `$BRAIN_ROOT` (else the current project dir / cwd).
    ```bash
    node "${CLAUDE_PLUGIN_ROOT}/bin/label-communities.mjs" --apply <repo> --labels <scratch>/labels-<repo>.json
    ```
-   The script merges (preserved always wins, invalid/missing entries fall back to derived names) and rewrites `graphify/<repo>/<repo>-GRAPH_REPORT.md` — **in place** if a report exists (only generic headings + hub links change; omitted thin communities are appended in an "Additional communities" section), or generated fresh if the mirror had no report at all.
+   The script merges (preserved always wins, invalid/missing entries fall back to derived names) and rewrites `graphify/<repo>/<repo>-GRAPH_REPORT.md` — **in place** if a report exists (only generic headings + hub links change; omitted thin communities are appended in an "Additional communities" section), or generated fresh if the mirror had no report at all. It also records each name's members in `.community-labels.json`; later passes check a kept name against those, so a name cannot drift onto an unrelated cluster one rebuild at a time. (`/brain:save`'s sync runs `label-communities.mjs --reconcile <repo>` on a kept report: names move with their members, and names that describe nothing are cleared to `Community N` for this skill to name.)
 
 4. **Regenerate the stubs** so `[[_COMMUNITY_*]]` links resolve to the new names:
    ```bash

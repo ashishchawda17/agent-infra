@@ -35,6 +35,7 @@
 import { readFileSync, writeFileSync, readdirSync, mkdirSync, rmSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { foldCommunityName, nameKey } from './community-name.mjs';
+import { isNamedLabel } from './label-guard.mjs';
 
 const VAULT = process.env.BRAIN_ROOT || process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
@@ -194,6 +195,10 @@ for (const name of names) {
   const candidates = [];
   for (const [rawName, set] of memberSets)
     for (const [base, p] of prior) {
+      // A placeholder never inherits a prior filename: `Community 3` landing in
+      // `_COMMUNITY_Gamma.md` keeps [[_COMMUNITY_Gamma]] resolving to a cluster
+      // that name was cleared from (INNOV-346).
+      if (!isNamedLabel(rawName)) continue;
       const score = jaccard(set, p.members);
       if (score >= 0.5) candidates.push({ rawName, base, score, priorLabel: p.label });
     }

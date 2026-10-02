@@ -1351,6 +1351,71 @@ else
   pass "session-guard/stale-record-still-commits"
 fi
 
+# --- 34. INNOV-346: a KEPT report over a rebuilt graph binds no name to the ---
+# wrong cluster. Vault report: Alpha=1 (a*), Beta=2 (b*), Gamma=3 (g*). The
+# rebuild swapped Alpha/Beta's ids and gave id 3 all-new members; the incoming
+# report names fewer, so the vault's is kept. Before the fix, stubs were built
+# from the kept report as-is: `_COMMUNITY_Alpha` held b*, `_COMMUNITY_Gamma` x*.
+echo "--- INNOV-346. kept report reconciled before stubs regenerate ---"
+write_346_report() { # file [crlf]
+  {
+    printf '# Graph Report\n\n## Community Hubs (Navigation)\n'
+    printf -- '- [[_COMMUNITY_Alpha|Alpha]]\n- [[_COMMUNITY_Beta|Beta]]\n- [[_COMMUNITY_Gamma|Gamma]]\n\n'
+    printf '## Communities\n'
+    printf '### Community 1 - "Alpha"\nNodes (3): a1, a2, a3\n\n'
+    printf '### Community 2 - "Beta"\nNodes (3): b1, b2, b3\n\n'
+    printf '### Community 3 - "Gamma"\nNodes (3): g1, g2, g3\n'
+  } >"$1"
+  if [[ "${2:-}" == crlf ]]; then sed -i 's/\r*$/\r/' "$1"; fi
+}
+# The suite's node stub only delegates label-guard.mjs; these cases need the
+# reconcile and the stub build to really run.
+STUBS_346="$TMPROOT/stubs-346"
+mkdir -p "$STUBS_346"
+cp "$STUBS/python" "$STUBS/python3" "$STUBS_346/"
+{
+  printf '#!/usr/bin/env bash\n'
+  printf 'for a in "$@"; do\n  case "$a" in\n'
+  printf '    *label-guard.mjs|*label-communities.mjs|*build-community-notes.mjs) exec %q "$@" ;;\n' "$REAL_NODE"
+  printf '  esac\ndone\nexit 0\n'
+} >"$STUBS_346/node"
+chmod +x "$STUBS_346/node"
+run_346() { # tag [crlf]
+  local tag="$1" box cdir
+  box="$(new_sandbox)"
+  write_346_report "$box/$DST_REL" "${2:-}"
+  make_report "$box/$SRC_REL" 1 2 "Rebuild Label"   # 1 named < 3 => refuse
+  {
+    printf '{"nodes":['
+    printf '{"id":"b%d","community":1},' 1 2 3
+    printf '{"id":"a%d","community":2},' 1 2 3
+    printf '{"id":"x1","community":3},{"id":"x2","community":3},{"id":"x3","community":3}'
+    printf '],"links":[]}\n'
+  } >"$box/repos/demorepo/graphify-out/graph.json"
+  run_sync "$box" "$STUBS_346:$PATH" >/dev/null
+  cdir="$box/vault/graphify/demorepo/communities"
+  if grep -q '"a1"' "$cdir/_COMMUNITY_Alpha.md" 2>/dev/null && grep -q '"b1"' "$cdir/_COMMUNITY_Beta.md" 2>/dev/null; then
+    pass "innov346-$tag/names-follow-their-members"
+  else
+    fail "innov346-$tag/names-follow-their-members" \
+      "Alpha's stub must hold a*, Beta's b*" \
+      "alpha: [$(cat "$cdir/_COMMUNITY_Alpha.md" 2>/dev/null)]" "stderr: [$(cat "$box/err.txt")]"
+  fi
+  if grep -lq '"x1"' "$cdir/_COMMUNITY_Gamma.md" 2>/dev/null; then
+    fail "innov346-$tag/no-stub-binds-a-cleared-name" \
+      "_COMMUNITY_Gamma.md holds x*, a cluster Gamma never described" "stderr: [$(cat "$box/err.txt")]"
+  else
+    pass "innov346-$tag/no-stub-binds-a-cleared-name"
+  fi
+  if grep -q 'Gamma' "$box/err.txt"; then
+    pass "innov346-$tag/clearing-is-announced"
+  else
+    fail "innov346-$tag/clearing-is-announced" "stderr: [$(cat "$box/err.txt")]"
+  fi
+}
+run_346 lf
+run_346 crlf crlf
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"

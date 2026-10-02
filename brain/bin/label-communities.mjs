@@ -24,7 +24,10 @@
 // and writes to <path>/graphify-out/, never in place.
 //
 // GUARANTEES
-//   - An existing non-generic label is never changed (preserved > agent > derived).
+//   - An existing non-generic label is never changed (preserved > agent > derived)
+//     while it still describes its cluster (see fit). One that no longer does —
+//     its members scattered, or a path name whose file left the cluster — is
+//     re-offered for naming (INNOV-346).
 //   - graph.json is never written. communities/ is never written — that dir is
 //     owned (and wholesale-regenerated) by build-community-notes.mjs.
 //   - An existing report is transformed IN PLACE: only generic headings, STALE
@@ -37,6 +40,14 @@
 // Usage:
 //   BRAIN_ROOT=<vault> node label-communities.mjs --digest [repo ...] [--top N]
 //   BRAIN_ROOT=<vault> node label-communities.mjs --apply <repo> --labels <file.json> [--force]
+//   BRAIN_ROOT=<vault> node label-communities.mjs --reconcile <repo>
+//
+// --reconcile is the save-time half (sync-graph.sh runs it when it KEEPS the
+// vault report over a rebuilt graph.json): names follow their members to the
+// re-minted ids, and a name that describes no live cluster is demoted to its
+// `Community N` placeholder for /brain:label. No naming, no derived filler. It
+// exists because stubs regenerated straight from a kept report bound each old
+// name to whatever cluster now held its id (INNOV-346).
 //
 // --digest prints a JSON work order per repo:
 //   { repo, total, preserved: {id: label}, derived: {id: name},
@@ -64,6 +75,15 @@
 // a name this script auto-derived is re-namable on a later run, while anything
 // else — including every label written before this sidecar existed — keeps
 // being treated as preserved. Absence of a record is always read the safe way.
+//
+// ANCHORS (INNOV-346, sidecar version 2)
+// The sidecar also records, per name (nameKey), the full member set the name was
+// given for. A kept name is compared against THAT, never re-anchored on preserve
+// or remap: the report's sample line is refreshed whenever a heading moves, so a
+// name checked only against its own sample could ratchet >= 0.5 per rebuild onto
+// an unrelated cluster (sports-management's "Shopify Auth Error" ended up holding
+// lib/fee-calculator.ts). Keyed by name, not id, so a --reconcile that moves the
+// name without rewriting the sidecar leaves its anchor valid.
 //
 // Pure Node, no deps.
 
@@ -144,10 +164,10 @@ function readMirror(repo) {
   // id (number) → label as written. Parsed by the shared module so this script
   // and sync-graph.sh cannot disagree about which lines are community headings.
   const reportLabels = report !== null ? readReportLabels(report) : new Map();
-  const reportMembers = report !== null ? readReportMembers(report) : new Map();
+  const [reportMembers, reportSizes] = readReportMembers(report);
   return {
-    dir, reportPath, report, reportLabels, reportMembers, members, degree,
-    provenance: readProvenance(dir),
+    dir, reportPath, report, reportLabels, reportMembers, reportSizes, members, degree,
+    provenance: readProvenance(dir), anchors: readAnchors(dir),
     nodeCount: nodes.length, linkCount: links.length,
   };
 }
@@ -172,23 +192,39 @@ function readProvenance(dir) {
   return out;
 }
 
-// id (number) → the member names the report STATES for that id, from the
-// `Nodes (n): a, b, c (+k more)` line under each heading. Line-scanned rather
-// than regex-paired because graphify slips a `Cohesion:` line in between.
-function readReportMembers(text) {
+// nameKey → Set of member keys the name was given for. Missing/corrupt → empty
+// map, i.e. "no anchor": callers fall back to the report's sample line.
+function readAnchors(dir) {
   const out = new Map();
-  if (typeof text !== 'string') return out;
+  try {
+    const data = JSON.parse(readFileSync(join(dir, PROV_FILE), 'utf8'));
+    for (const [k, v] of Object.entries(data?.anchors ?? {}))
+      if (Array.isArray(v) && v.length) out.set(k, new Set(v.map(String)));
+  } catch {
+    /* no sidecar, or unreadable: no anchors */
+  }
+  return out;
+}
+
+// id (number) → the member names the report STATES for that id, from the
+// `Nodes (n): a, b, c (+k more)` line under each heading, and id → that n.
+// Line-scanned rather than regex-paired because graphify slips a `Cohesion:`
+// line in between.
+function readReportMembers(text) {
+  const out = new Map(), sizes = new Map();
+  if (typeof text !== 'string') return [out, sizes];
   let id = null;
   for (const line of text.split(/\r?\n/)) {
     const h = /^### Community (\d+) - "/.exec(line);
     if (h) { id = Number(h[1]); continue; }
     if (id === null) continue;
-    const n = /^Nodes \(\d+\): (.*)$/.exec(line);
+    const n = /^Nodes \((\d+)\): (.*)$/.exec(line);
     if (!n) continue;
-    out.set(id, n[1].replace(/\s*\(\+\d+ more\)\s*$/, '').split(',').map((x) => x.trim()).filter(Boolean));
+    out.set(id, n[2].replace(/\s*\(\+\d+ more\)\s*$/, '').split(',').map((x) => x.trim()).filter(Boolean));
+    sizes.set(id, Number(n[1]));
     id = null;
   }
-  return out;
+  return [out, sizes];
 }
 
 // Fraction of a heading's stated members that must still be in graph.json's
@@ -210,16 +246,44 @@ const STALE_OVERLAP = 0.5;
 // refusal message tells you to fix. Identity can see it: compare the members the
 // heading states against the members the id actually holds now.
 //
-// Fail-safe: a heading with no parseable member line is NOT called stale (we know
-// nothing about it, and the standing rule is to preserve).
-function isStale(m, id) {
+// Fail-safe: a heading with no parseable member line and no anchor is NOT called
+// stale (we know nothing about it, and the standing rule is to preserve).
+const isStale = (m, id) => fit(m, id, m.reportLabels.get(id), m.members.get(id)) < STALE_OVERLAP;
+
+// How well does `label`, as written under heading `id`, describe the live cluster
+// `nodes`? 0..1, compared against STALE_OVERLAP. One score for every caller —
+// keep, remap and refresh — so they cannot disagree (INNOV-346):
+//   - a path name ("docs/ARCHITECTURE_MAP.md") whose file is not among the
+//     cluster's source files scores 0. graphify derived it from that file, and
+//     the docs carve-out left 14 such names on sports-management code clusters;
+//   - an anchored name scores the Jaccard of its anchor and the cluster;
+//   - otherwise the report's sample, scaled by the `Nodes (n)` it stated. Pure
+//     containment of a <=12 sample cannot see a cluster that shrank or swelled
+//     around it; this estimates shared = hit-rate x n, a sample-based Jaccard.
+//     ponytail: an estimate, noisy when 12 samples stand for 100+ nodes; the
+//     anchor replaces it once a name has been through --apply.
+function fit(m, id, label, nodes) {
+  if (!nodes) return 0; // id no longer exists in graph.json
+  if (isPathName(label) && !nodes.some((n) => endsWithPath(n.source_file, label))) return 0;
+  const now = new Set(nodes.map(nodeKey));
+  const anchor = m.anchors.get(nameKey(label));
+  if (anchor) return jaccard(anchor, now);
   const stated = m.reportMembers.get(id);
-  if (!stated || stated.length === 0) return false;
-  const actual = m.members.get(id);
-  if (!actual) return true; // id no longer exists in graph.json
-  const now = new Set(actual.map(nodeKey));
-  const hit = stated.filter((s) => now.has(s)).length;
-  return hit / stated.length < STALE_OVERLAP;
+  if (!stated || stated.length === 0) return 1;
+  const hit = stated.filter((s) => now.has(s)).length / stated.length;
+  const was = Math.max(m.reportSizes.get(id) ?? 0, stated.length);
+  const shared = Math.min(hit * was, now.size);
+  return shared / (was + now.size - shared);
+}
+
+const isPathName = (label) => /[\\/]/.test(label ?? '') && /\.[A-Za-z0-9]{1,6}$/.test(label);
+const normPath = (p) => String(p ?? '').replace(/\\/g, '/').toLowerCase();
+const endsWithPath = (file, label) => normPath(file).endsWith(normPath(label));
+
+function jaccard(a, b) {
+  let hit = 0;
+  for (const x of a) if (b.has(x)) hit++;
+  return hit / (a.size + b.size - hit || 1);
 }
 
 // Is this id's existing report label off-limits?
@@ -298,8 +362,7 @@ function deriveName(nodes, taken) {
 // on the 2026-08-22 repro, 16 of 25 named communities landed in batches as
 // "unlabeled" and --apply overwrote them. Before a displaced name is given up
 // on, match it to the live cluster that still holds its stated members: the
-// same overlap rule isStale applies (containment of the report's <=12-member
-// sample — Jaccard against a full cluster could never clear the bar), the same
+// same fit() isStale applies (anchor Jaccard, else the size-scaled sample), the same
 // member-identity idea build-community-notes.mjs uses to keep stub filenames
 // stable across reminting. A matched name is preserved at its NEW id; only
 // names with no surviving cluster fall through to the work order.
@@ -312,17 +375,15 @@ function remapNames(m, inPlaceIds, takenNames) {
     const rec = m.provenance.get(oldId);
     if (rec && rec.provenance === 'derived' && nameKey(rec.name ?? '') === nameKey(label)) continue; // script filler — not worth moving
     if (m.members.has(oldId) && !isStale(m, oldId)) continue; // still describes its own id
-    const stated = m.reportMembers.get(oldId);
-    if (!stated || stated.length === 0) continue;
-    movable.push({ oldId, label, stated });
+    if (!m.reportMembers.get(oldId)?.length && !m.anchors.has(nameKey(label))) continue; // nothing to match on
+    movable.push({ oldId, label });
   }
   if (!movable.length) return out;
   const scored = [];
-  for (const { oldId, label, stated } of movable)
+  for (const { oldId, label } of movable)
     for (const [id, nodes] of m.members) {
       if (inPlaceIds.has(id)) continue; // that id's current name is off-limits
-      const now = new Set(nodes.map(nodeKey));
-      const overlap = stated.filter((s) => now.has(s)).length / stated.length;
+      const overlap = fit(m, oldId, label, nodes);
       if (overlap >= STALE_OVERLAP) scored.push({ oldId, id, label, overlap });
     }
   // Greedy best-first with a deterministic tie-break — the same assignment
@@ -390,7 +451,7 @@ const nodesLine = (nodes) =>
 
 const ADDITIONAL_HEADER = '## Additional communities (labeled vault-side)';
 
-function transformReport(m, finalLabels, preservedIds, keepLinkNames = new Set()) {
+function transformReport(m, finalLabels, preservedIds, keepLinkNames = new Set(), { dropOrphans = true } = {}) {
   // In-place: rename renamable headings + their hub links; append omitted ids.
   let text = m.report;
   const appended = [];
@@ -440,7 +501,9 @@ function transformReport(m, finalLabels, preservedIds, keepLinkNames = new Set()
   // drop link entries that pointed at an orphan's label and nothing else, and
   // restate the `## Communities (N total, ...)` count over live ids. The
   // INNOV-274 write guard below compares live ids only, so this cannot trip it.
-  const orphanIds = new Set([...m.reportLabels.keys()].filter((id) => !m.members.has(id)));
+  // --reconcile keeps them: an orphan heading binds no members, so it cannot
+  // poison a stub, and deleting names is /brain:label's call, not a sync's.
+  const orphanIds = new Set(dropOrphans ? [...m.reportLabels.keys()].filter((id) => !m.members.has(id)) : []);
   if (orphanIds.size) {
     const kept = [];
     let dropping = false;
@@ -685,8 +748,18 @@ if (argv.includes('--apply')) {
   // Provenance sidecar: which of these names a human/agent chose and which this
   // script invented. Without it, the next classify() cannot tell them apart and
   // reads its own filler as a name worth preserving.
-  const provOut = { version: 1, repo, updated: date, labels: {} };
-  for (const id of bySize) provOut.labels[id] = { name: finalLabels[id], provenance: origin[id] };
+  // Anchors: a newly agent-named label is anchored to its members NOW; a kept
+  // one carries its existing anchor (seeded from today's members when it has
+  // none yet). Never refreshed — see ANCHORS above. Derived filler is re-derived
+  // each run, so it gets none.
+  const provOut = { version: 2, repo, updated: date, labels: {}, anchors: {} };
+  for (const id of bySize) {
+    provOut.labels[id] = { name: finalLabels[id], provenance: origin[id] };
+    if (origin[id] === 'derived') continue;
+    const k = nameKey(finalLabels[id]);
+    const prev = origin[id] === 'preserved' ? m.anchors.get(k) : undefined;
+    provOut.anchors[k] = [...(prev ?? new Set(m.members.get(id).map(nodeKey)))].sort();
+  }
   writeFileSync(join(m.dir, PROV_FILE), JSON.stringify(provOut, null, 2) + '\n', 'utf8');
   console.log(
     `${repo}: ${m.members.size} communities — ${Object.keys(preserved).length} preserved, ` +
@@ -699,5 +772,35 @@ if (argv.includes('--apply')) {
   process.exit(0);
 }
 
-console.error('usage: label-communities.mjs --digest [repo ...] [--top N] | --apply <repo> --labels <file.json> [--force]');
+if (argv.includes('--reconcile')) {
+  const repo = argv[argv.indexOf('--reconcile') + 1];
+  if (!repo || repo.startsWith('--')) {
+    console.error('usage: label-communities.mjs --reconcile <repo>');
+    process.exit(1);
+  }
+  const m = readMirror(repo);
+  if (m.report === null) process.exit(0); // nothing to bind names from
+  const { preserved, remapped } = classify(repo, m);
+  const finalLabels = { ...preserved };
+  const preservedIds = new Set(Object.keys(preserved).map(Number).filter((id) => remapped[id] === undefined));
+  const demoted = [];
+  for (const [id, label] of m.reportLabels) {
+    if (!m.members.has(id) || preserved[id] !== undefined || !isNamedLabel(label) || !isStale(m, id)) continue;
+    finalLabels[id] = `Community ${id}`;
+    demoted.push(`${id} "${label}"`);
+  }
+  const keepLinkNames = new Set(Object.values(remapped).map((r) => nameKey(r.label)));
+  const text = transformReport(m, finalLabels, preservedIds, keepLinkNames, { dropOrphans: false });
+  if (text === m.report) process.exit(0);
+  writeFileSync(m.reportPath, text, 'utf8');
+  for (const [id, r] of Object.entries(remapped)) console.error(`reconcile ${repo}: "${r.label}" moved with its members, community ${r.from} -> ${id}`);
+  if (demoted.length)
+    console.error(
+      `reconcile ${repo}: ${demoted.length} name(s) no longer describe their cluster and were cleared to placeholders: ` +
+        `${demoted.join(', ')} — run /brain:label ${repo} to name them`
+    );
+  process.exit(0);
+}
+
+console.error('usage: label-communities.mjs --digest [repo ...] [--top N] | --apply <repo> --labels <file.json> [--force] | --reconcile <repo>');
 process.exit(1);
