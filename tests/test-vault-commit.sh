@@ -538,6 +538,24 @@ run_guard -m "midway failure"
 assert_eq "midway/pre-staged-refused" "1" "$STATUS" "$(evidence)"
 assert_eq "midway/pre-staged-survives-alone" "logs/2026-10-02-other.md" "$(staged_list | tr -d '\r')" "$(evidence)"
 
+# --- 21e. a staged RENAME out of a forbidden path is seen by its source -----
+# With rename detection, `diff --cached --name-only` prints only the destination,
+# so a rename chats/ -> logs/ read as an allowlisted logs/ path, and the commit
+# carried the chats/ deletion. Both index reads must list the source too.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+mkdir -p "$VAULT/chats"
+echo "private transcript" >"$VAULT/chats/old.md"
+git -C "$VAULT" add -f chats/old.md >/dev/null 2>&1
+git -C "$VAULT" commit -qm "a tracked private file" >/dev/null 2>&1
+git -C "$VAULT" mv chats/old.md logs/old.md >/dev/null 2>&1   # "another session"
+make_dirty
+before="$(head_sha)"
+run_guard -m "would carry a chats/ rename"
+assert_eq "index/rename-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "index/rename-head-unmoved" "$before" "$(head_sha)" "$(evidence)"
+assert_contains "index/rename-names-the-source" "chats/old.md" "$(out_all)" "$(evidence)"
+
 # --- 22. no .saveinclude => REFUSE, never a permissive default ------------
 # There is no safe fallback: committing everything publishes chats/, committing
 # nothing makes every save a silent no-op. So it fails closed.

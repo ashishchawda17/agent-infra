@@ -412,13 +412,15 @@ if [[ $FORCE_COMMIT -eq 0 ]]; then
 fi
 
 # Every path in the index, NUL-separated so a non-ASCII name comes back verbatim
-# rather than octal-quoted. Fills the array named by $1, bash 3.2 style.
+# rather than octal-quoted. --no-renames: a staged rename lists its source too,
+# or a rename out of chats/ reads as its allowlisted destination alone.
+# Fills the array named by $1, bash 3.2 style.
 read_index() { # array-name
   local _p
   eval "$1=()"
   while IFS= read -r -d '' _p; do
     eval "$1+=(\"\$_p\")"
-  done < <(git -C "$VAULT" diff --cached --name-only -z 2>/dev/null)
+  done < <(git -C "$VAULT" diff --cached --name-only --no-renames -z 2>/dev/null)
 }
 
 # Unstages what THIS run added: the index now, minus what it held before step 5,
@@ -527,9 +529,7 @@ done
 # this check governs the commit. It is the one that makes the guarantee real.
 # The same check ran before step 5, so a hit here was staged during it.
 STAGED=()
-while IFS= read -r _line; do
-  [ -n "$_line" ] && STAGED+=("$_line")
-done < <(git -C "$VAULT" diff --cached --name-only 2>/dev/null)
+read_index STAGED
 
 if [[ ${#STAGED[@]} -eq 0 ]]; then
   # PR mode: the caller named edits it expects to ship. Exit 0 here would let it
