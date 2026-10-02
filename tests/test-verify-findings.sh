@@ -94,6 +94,12 @@ check "record/writes" "$([[ $rc -eq 0 && "$(node -e 'process.stdout.write(String
 check "record/fields" "$([[ "$(field wiki/a.md 'r.pr+"|"+r.subtype+"|"+r.drift[0].new+"|"+r.evidence.sha+"|"+r.blob.length')" == '42|line-drift|src/x.ts:14|abc1234|40' ]]; echo $?)" "got: [$(field wiki/a.md 'JSON.stringify(r)')]"
 check "record/dead-link-target" "$([[ "$(field wiki/d.md 'r.target+"|"+r.verdict')" == 'Gone Target|none' ]]; echo $?)" "got: [$(field wiki/d.md 'JSON.stringify(r)')]"
 
+cp "$FIND" "$TMPROOT/before.json"
+printf '%s
+' '{"note":"wiki/c.md","kind":"claim","verdict":"holds","reason":"ok"}' '{"note":"wiki/a.md","kind":"claim","verdict":"maybe","reason":"bad"}' >"$TMPROOT/v.jsonl"
+record; rc=$?
+check "record/refusal-keeps-store" "$([[ $rc -ne 0 ]] && cmp -s "$FIND" "$TMPROOT/before.json"; echo $?)" "rc=$rc out: [$(cat "$TMPROOT/r.txt")]"
+
 # --- 4. second run: judged items carried, --max spent on new ones only --------
 scan; queue --max 1
 check "queue/carries-judged" "$([[ "$(qcount carried)" == 3 && "$(qcount work)" == 1 && "$(qcount work wiki/c.md)" == 1 ]]; echo $?)" "q: [$(cat "$TMPROOT/q.txt")]"
