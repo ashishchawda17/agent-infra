@@ -136,8 +136,8 @@
 #     either, so the refusal lists the paths it could not unstage.
 #   - a path staged before the run that this run re-added keeps this run's
 #     content; the other session's staged version cannot be restored.
-#   - an allowlisted path another session stages while this run is staging looks
-#     like this run's and is unstaged with it.
+#   - a path another session stages while this run is staging, under an entry
+#     this run already added, looks like this run's and is unstaged with it.
 set -uo pipefail
 
 VAULT="${BRAIN_ROOT:-${CLAUDE_PROJECT_DIR:-$PWD}}"
@@ -421,17 +421,20 @@ read_index() { # array-name
   done < <(git -C "$VAULT" diff --cached --name-only -z 2>/dev/null)
 }
 
-# Unstages what THIS run added: the index now, minus what it held before step 5.
-# A path staged before the run is never touched, so another session's work stays.
-# Neither is a path the allowlist forbids: this run never stages one, so it was
-# staged concurrently (step 6's race). Prints one line for the refusal.
+# Unstages what THIS run added: the index now, minus what it held before step 5,
+# limited to paths under an entry step 5 has already `git add`ed (ADDED). A path
+# staged before the run is never touched, so another session's work stays, and
+# neither is one outside ADDED: this run cannot have staged it, so it was staged
+# concurrently. Prints one line for the refusal.
+ADDED=()
 unstage_this_run() {
   local now=() ours=() p q mine
   read_index now
   for p in "${now[@]:-}"; do
     [[ -z "$p" ]] && continue
-    path_is_allowed "$p" || continue
-    mine=1
+    mine=0
+    for q in "${ADDED[@]:-}"; do [[ -n "$q" ]] && path_is_allowed_by "$p" "$q" && { mine=1; break; }; done
+    [[ $mine -eq 1 ]] || continue
     for q in "${PRE_STAGED[@]:-}"; do [[ "$p" == "$q" ]] && { mine=0; break; }; done
     [[ $mine -eq 1 ]] && ours+=("$p")
   done
@@ -513,6 +516,7 @@ for entry in "${PATHS[@]}"; do
       "  under that path is gitignored. Nothing was committed." \
       "$(unstage_this_run)"
   fi
+  ADDED+=("$entry")
   staged_any=1
 done
 
