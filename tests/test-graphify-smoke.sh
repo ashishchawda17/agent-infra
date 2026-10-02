@@ -23,11 +23,13 @@ else
   bad "trigger must be workflow_dispatch only"
 fi
 
-if printf '%s\n' "$wf" | grep -q '^permissions:' &&
-   printf '%s\n' "$wf" | awk '/^permissions:/{f=1;next} f&&/^[^ ]/{exit} f' | grep -q '^  contents: read$'; then
-  ok "permissions: contents: read"
+# Least privilege: contents: read and nothing else, at workflow and job level.
+perm_block=$(printf '%s\n' "$wf" | awk '/^permissions:/{f=1;next} f&&/^[^ ]/{exit} f' | grep -v '^ *$')
+if [ "$perm_block" = "  contents: read" ] &&
+   [ "$(printf '%s\n' "$wf" | grep -c 'permissions:')" = 1 ]; then
+  ok "permissions: contents: read only"
 else
-  bad "permissions must declare contents: read"
+  bad "permissions must be exactly contents: read"
 fi
 
 # The pin must match the skills' pin, so the run proves the version users get.
