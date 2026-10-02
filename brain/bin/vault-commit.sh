@@ -59,7 +59,8 @@
 #
 # Contract (callers and tests depend on exactly this):
 #   exit 0  => committed, or there was nothing to commit (both say which on stdout)
-#   exit 1  => REFUSED, nothing was staged and nothing was committed
+#   exit 1  => REFUSED, nothing was committed and nothing this run staged is left
+#              staged (see "NOTHING IS STAGED ON A REFUSAL" for the limits)
 # The FIRST line of output always starts with "VAULT-COMMIT: OK" (stdout) or
 # "VAULT-COMMIT: REFUSED" (stderr), so a caller can branch on it without parsing
 # prose.
@@ -68,8 +69,8 @@
 # one path or glob per line, `#` comments and blanks ignored. Two things happen
 # with it, and the second is the one that matters:
 #   1. Staging  — only allowlisted entries are staged (never `git add -A`).
-#   2. VERIFICATION — after staging, every path in the index is checked against
-#      the allowlist, and a single path outside it REFUSES the commit.
+#   2. VERIFICATION — before staging and again after, every path in the index is
+#      checked against the allowlist, and a single path outside it REFUSES.
 # Step 2 is not redundant with step 1. The git index is GLOBAL to the checkout:
 # a concurrent session, an aborted merge, or a human running `git add` can leave
 # anything at all staged, and step 1 alone would happily sweep it into this
@@ -122,11 +123,22 @@
 #   - named paths with no change REFUSE (exit 1), unlike the default mode's
 #     "nothing to commit" exit 0: the caller is about to open a PR for them.
 #
-# NOTHING IS STAGED ON A REFUSAL. Every guard runs BEFORE the first `git add`, so
-# a refusal leaves the index exactly as it found it. The older sync-graph.sh
-# behaviour — stage, then refuse, and tell the user it was "left staged" — is
-# wrong in a shared checkout: it hands the next session's commit a payload it
-# never chose. A refusal here costs a re-run, nothing else.
+# NOTHING IS STAGED ON A REFUSAL. Every guard runs BEFORE the first `git add`,
+# including the index check: a path the allowlist forbids (PR mode: any path) is
+# refused before staging (INNOV-369). A refusal AFTER staging — `git add` failing
+# midway, a path staged concurrently, `git commit` failing — unstages what this
+# run added (the index now, minus what it held before staging) and never unstages
+# a path staged before the run. The older sync-graph.sh behaviour — stage, then
+# refuse, and tell the user it was "left staged" — is wrong in a shared checkout:
+# it hands the next session's commit a payload it never chose.
+# Where that unstage cannot give the guarantee, the refusal says so:
+#   - the index is locked by another process: the unstage cannot take the lock
+#     either, so the refusal lists the paths it could not unstage.
+#   - a path staged before the run that this run re-added keeps this run's
+#     content; the other session's staged version cannot be restored. The
+#     refusal names each such path.
+#   - a path another session stages while this run is staging, under an entry
+#     this run already added, looks like this run's and is unstaged with it.
 set -uo pipefail
 
 VAULT="${BRAIN_ROOT:-${CLAUDE_PROJECT_DIR:-$PWD}}"
@@ -400,14 +412,85 @@ if [[ $FORCE_COMMIT -eq 0 ]]; then
   fi
 fi
 
-# PR mode: the shared index must be empty BEFORE staging. Refusing only after
-# `git add` would leave this command's paths staged next to someone else's.
-if [[ $PR_MODE -eq 1 ]]; then
-  pre_staged="$(git -C "$VAULT" diff --cached --name-only 2>/dev/null)"
-  if [[ -n "$pre_staged" ]]; then
-    refuse "the shared index already holds staged paths"       "$(printf '%s
-' "$pre_staged" | sed 's/^/    /')"       "  A PR-bound commit carries only the paths it names. Nothing was staged,"       "  and nothing was unstaged: that work belongs to whoever staged it."
+# Every path in the index, NUL-separated so a non-ASCII name comes back verbatim
+# rather than octal-quoted. --no-renames: a staged rename lists its source too,
+# or a rename out of chats/ reads as its allowlisted destination alone.
+# Fills the array named by $1, bash 3.2 style.
+read_index() { # array-name
+  local _p
+  eval "$1=()"
+  while IFS= read -r -d '' _p; do
+    eval "$1+=(\"\$_p\")"
+  done < <(git -C "$VAULT" diff --cached --name-only --no-renames -z 2>/dev/null)
+}
+
+# Unstages what THIS run added: the index now, minus what it held before step 5,
+# limited to paths under an entry step 5 has already `git add`ed (ADDED). A path
+# staged before the run is never unstaged, so another session's work stays, and
+# neither is one outside ADDED: this run cannot have staged it, so it was staged
+# concurrently. A pre-staged path under ADDED may now hold this run's content,
+# which cannot be undone, so it is named. Prints the lines for the refusal.
+ADDED=()
+unstage_this_run() {
+  local now=() ours=() kept=() p q mine
+  read_index now
+  for p in "${now[@]:-}"; do
+    [[ -z "$p" ]] && continue
+    mine=0
+    for q in "${ADDED[@]:-}"; do [[ -n "$q" ]] && path_is_allowed_by "$p" "$q" && { mine=1; break; }; done
+    [[ $mine -eq 1 ]] || continue
+    for q in "${PRE_STAGED[@]:-}"; do [[ "$p" == "$q" ]] && { mine=0; break; }; done
+    if [[ $mine -eq 1 ]]; then ours+=("$p"); else kept+=("$p"); fi
+  done
+  if [[ ${#kept[@]} -gt 0 ]]; then
+    echo "  Staged before this run and re-added by it, so they may hold this run's"
+    echo "  content (left staged; the earlier staged version cannot be restored):"
+    printf '    %s\n' "${kept[@]}"
   fi
+  if [[ ${#ours[@]} -eq 0 ]]; then
+    echo "  No other path this run staged is left in the index."
+  elif printf '%s\0' "${ours[@]}" | git --literal-pathspecs -C "$VAULT" \
+         reset -q --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1; then
+    echo "  The ${#ours[@]} path(s) this run staged were unstaged again."
+  else
+    echo "  COULD NOT unstage the ${#ours[@]} path(s) this run staged (index locked?):"
+    printf '    %s\n' "${ours[@]}"
+  fi
+}
+
+refuse_foreign() { # last line, then the paths
+  local last="$1"; shift
+  refuse "the index contains $# path(s) that '.saveinclude' does not allow" \
+    "$(printf '    %s\n' "$@")" \
+    "  These were already staged before this command ran — the git index is shared" \
+    "  by every session using this checkout, so another session (or a stray" \
+    "  'git add') can put anything in it. Committing now would publish them." \
+    "  Nothing was committed, and nothing of theirs was unstaged: unstaging another" \
+    "  session's work would be its own kind of damage." \
+    "$last" \
+    "  Remedy: review them, then either" \
+    "    git -C \"$VAULT\" restore --staged <path>      # drop from the index" \
+    "  or add the path to $SAVEINCLUDE if it belongs in vault commits."
+}
+
+# The shared index is checked BEFORE staging (INNOV-369). Refusing only after
+# `git add` would leave this command's paths staged next to someone else's.
+# PR mode: the index must be empty. Default mode: it may hold only allowlisted
+# paths, the same rule step 6 applies to the commit.
+PRE_STAGED=()
+read_index PRE_STAGED
+if [[ $PR_MODE -eq 1 && ${#PRE_STAGED[@]} -gt 0 ]]; then
+  refuse "the shared index already holds staged paths" \
+    "$(printf '    %s\n' "${PRE_STAGED[@]}")" \
+    "  A PR-bound commit carries only the paths it names. Nothing was staged," \
+    "  and nothing was unstaged: that work belongs to whoever staged it."
+fi
+foreign=()
+for p in "${PRE_STAGED[@]:-}"; do
+  [[ -n "$p" ]] && ! path_is_allowed "$p" && foreign+=("$p")
+done
+if [[ ${#foreign[@]} -gt 0 ]]; then
+  refuse_foreign "  This run staged nothing: the check runs before the first 'git add'." "${foreign[@]}"
 fi
 
 # --- 5. stage ---------------------------------------------------------------
@@ -439,8 +522,10 @@ for entry in "${PATHS[@]}"; do
     refuse "'git add -- $entry' failed" \
       "$(printf '    %s\n' "$add_err")" \
       "  Common causes: the index is locked by a concurrent session, or every file" \
-      "  under that path is gitignored. Nothing was committed."
+      "  under that path is gitignored. Nothing was committed." \
+      "$(unstage_this_run)"
   fi
+  ADDED+=("$entry")
   staged_any=1
 done
 
@@ -449,10 +534,9 @@ done
 # already have staged something the allowlist forbids — another session, an
 # aborted merge, a human's `git add -A`. Step 5's discipline only governs step 5;
 # this check governs the commit. It is the one that makes the guarantee real.
+# The same check ran before step 5, so a hit here was staged during it.
 STAGED=()
-while IFS= read -r _line; do
-  [ -n "$_line" ] && STAGED+=("$_line")
-done < <(git -C "$VAULT" diff --cached --name-only 2>/dev/null)
+read_index STAGED
 
 if [[ ${#STAGED[@]} -eq 0 ]]; then
   # PR mode: the caller named edits it expects to ship. Exit 0 here would let it
@@ -472,22 +556,14 @@ for path in "${STAGED[@]}"; do
   path_is_allowed "$path" || violations+=("$path")
 done
 
+# The up-front check makes this a race: something was staged during step 5.
 if [[ ${#violations[@]} -gt 0 ]]; then
-  refuse "the index contains ${#violations[@]} path(s) that '.saveinclude' does not allow" \
-    "$(printf '    %s\n' "${violations[@]}")" \
-    "  These were already staged before this command ran — the git index is shared" \
-    "  by every session using this checkout, so another session (or a stray" \
-    "  'git add') can put anything in it. Committing now would publish them." \
-    "  Nothing was committed, and nothing was UNstaged either: unstaging another" \
-    "  session's work would be its own kind of damage." \
-    "  Remedy: review them, then either" \
-    "    git -C \"$VAULT\" restore --staged <path>      # drop from the index" \
-    "  or add the path to $SAVEINCLUDE if it belongs in vault commits."
+  refuse_foreign "$(unstage_this_run)" "${violations[@]}"
 fi
 
 # --- 7. commit --------------------------------------------------------------
 if ! commit_out="$(git -C "$VAULT" commit -m "$MESSAGE" 2>&1)"; then
-  refuse "git commit failed" "$(printf '    %s\n' "$commit_out")"
+  refuse "git commit failed" "$(printf '    %s\n' "$commit_out")" "$(unstage_this_run)"
 fi
 
 echo "VAULT-COMMIT: OK - committed ${#STAGED[@]} path(s) on '$CUR_BRANCH'"

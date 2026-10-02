@@ -477,11 +477,88 @@ run_guard -m "would publish a secret"
 assert_eq "index/contaminated-refused" "1" "$STATUS" "$(evidence)"
 assert_eq "index/contaminated-head-unmoved" "$before" "$(head_sha)" "$(evidence)"
 assert_contains "index/names-the-offending-path" "chats/secret.md" "$(out_all)" "$(evidence)"
+# INNOV-369: the refusal leaves none of THIS run's paths staged. The index is
+# not literally empty — case 21 is the other session's path, which stays.
+assert_eq "index/contaminated-stages-nothing-of-ours" "chats/secret.md" "$(staged_list | tr -d '\r')" "$(evidence)"
 
 # --- 21. ...and it does NOT unstage the other session's work --------------
 # Unstaging someone else's staged work would be its own kind of damage. Refusing
 # is the whole remedy; the human decides what to do with the index.
 assert_contains "index/other-sessions-work-left-alone" "chats/secret.md" "$(staged_list | tr '\n' ' ')" "$(evidence)"
+
+# --- 21b. the foreign-path check runs BEFORE the first `git add` -----------
+# Negative control for INNOV-369's up-front check. Staging, refusing and then
+# unstaging ends in the same index, so the index alone cannot tell the two
+# apart. A held index.lock can: `git diff --cached` still reads, `git add` fails.
+# With the check up front the refusal names the foreign path; without it, the
+# run reaches `git add` and refuses on the lock instead.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+mkdir -p "$VAULT/chats"
+echo "private transcript" >"$VAULT/chats/secret.md"
+git -C "$VAULT" add -f chats/secret.md >/dev/null 2>&1   # "another session"
+make_dirty
+: >"$VAULT/.git/index.lock"                              # a concurrent git process
+run_guard -m "would publish a secret"
+rm -f "$VAULT/.git/index.lock"
+assert_eq "index/precheck-refused" "1" "$STATUS" "$(evidence)"
+assert_contains "index/precheck-names-foreign-path" "chats/secret.md" "$(out_all)" "$(evidence)"
+assert_not_contains "index/precheck-never-reached-git-add" "git add" "$(first_line "$BOX/err.txt")" "$(evidence)"
+
+# --- 21c. a `git add` failing midway unstages what this run already added ---
+# sb_new's allowlist ends with graphify-out/graph.json. Gitignore it and the
+# loop stages wiki/log.md, then fails on the ignored entry. Without the unstage,
+# wiki/log.md stays staged for the next session's commit to carry.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+printf 'graphify-out/\n' >"$VAULT/.gitignore"
+mkdir -p "$VAULT/graphify-out"
+echo "{}" >"$VAULT/graphify-out/graph.json"
+make_dirty
+before="$(head_sha)"
+run_guard -m "midway failure"
+assert_eq "midway/refused" "1" "$STATUS" "$(evidence)"
+assert_contains "midway/names-the-failed-add" "graphify-out/graph.json" "$(out_all)" "$(evidence)"
+assert_eq "midway/head-unmoved" "$before" "$(head_sha)" "$(evidence)"
+assert_eq "midway/index-empty" "0" "$(staged_count)" "staged: [$(staged_list | tr '\n' ' ')]" "$(evidence)"
+
+# --- 21d. ...and leaves a path staged BEFORE the run exactly where it was ----
+# Another session's allowlisted path passes the up-front check; the unstage
+# must only take back what this run added.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+printf 'graphify-out/\n' >"$VAULT/.gitignore"
+mkdir -p "$VAULT/graphify-out"
+echo "{}" >"$VAULT/graphify-out/graph.json"
+echo "their log" >"$VAULT/logs/2026-10-02-other.md"
+git -C "$VAULT" add logs/2026-10-02-other.md >/dev/null 2>&1   # "another session"
+echo "mine" >"$VAULT/logs/2026-10-02-mine.md"
+make_dirty
+run_guard -m "midway failure"
+assert_eq "midway/pre-staged-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "midway/pre-staged-survives-alone" "logs/2026-10-02-other.md" "$(staged_list | tr -d '\r')" "$(evidence)"
+# logs/ was re-added, so its staged blob may now be this run's. That cannot be
+# undone, so the refusal must name it rather than claim nothing of ours is left.
+assert_contains "midway/re-added-pre-staged-path-named" "re-added by it" "$(out_all)" "$(evidence)"
+assert_contains "midway/re-added-pre-staged-path-listed" "logs/2026-10-02-other.md" "$(out_all)" "$(evidence)"
+
+# --- 21e. a staged RENAME out of a forbidden path is seen by its source -----
+# With rename detection, `diff --cached --name-only` prints only the destination,
+# so a rename chats/ -> logs/ read as an allowlisted logs/ path, and the commit
+# carried the chats/ deletion. Both index reads must list the source too.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+mkdir -p "$VAULT/chats"
+echo "private transcript" >"$VAULT/chats/old.md"
+git -C "$VAULT" add -f chats/old.md >/dev/null 2>&1
+git -C "$VAULT" commit -qm "a tracked private file" >/dev/null 2>&1
+git -C "$VAULT" mv chats/old.md logs/old.md >/dev/null 2>&1   # "another session"
+make_dirty
+before="$(head_sha)"
+run_guard -m "would carry a chats/ rename"
+assert_eq "index/rename-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "index/rename-head-unmoved" "$before" "$(head_sha)" "$(evidence)"
+assert_contains "index/rename-names-the-source" "chats/old.md" "$(out_all)" "$(evidence)"
 
 # --- 22. no .saveinclude => REFUSE, never a permissive default ------------
 # There is no safe fallback: committing everything publishes chats/, committing
