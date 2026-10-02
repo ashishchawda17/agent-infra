@@ -1407,6 +1407,10 @@ run_346() { # tag [crlf]
   else
     pass "innov346-$tag/no-stub-binds-a-cleared-name"
   fi
+  # Clearing must not lower the label guard's floor: at 2 named, the next sync's
+  # any incoming report naming >= 2 would overwrite Alpha and Beta.
+  assert_eq "innov346-$tag/named-count-floor-kept" "3" "$(count_named_labels "$box/$DST_REL")" \
+    "report: [$(cat "$box/$DST_REL")]"
   if grep -q 'Gamma' "$box/err.txt"; then
     pass "innov346-$tag/clearing-is-announced"
   else

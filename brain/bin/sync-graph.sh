@@ -671,7 +671,7 @@ for repo in "${repos[@]}"; do
   # was written for, and graph.json was just replaced. Regenerating stubs from it
   # as-is bound each old name to whatever cluster now holds its id (brain-plugin,
   # 2026-09-28: "Eval Scoring" over session.sh's functions). Move names with
-  # their members and clear the rest to placeholders first. A copied report was
+  # their members and replace the rest with derived names first. A copied report was
   # written for this graph.json and needs none of it.
   if [[ $report_copied -eq 0 && -f "$dst/$name-GRAPH_REPORT.md" ]]; then
     BRAIN_ROOT="$VAULT" node "$SCRIPT_DIR/label-communities.mjs" --reconcile "$name"       || echo "warn: community names not reconciled for $name — its stubs may carry names of clusters they no longer hold; run /brain:label $name" >&2

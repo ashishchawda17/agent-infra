@@ -1125,10 +1125,11 @@ assert_eq "anchor/control-without-anchor-sample-rule-keeps-it" "Alpha Cluster" \
 write_reconcile_mirror() { # box [crlf]
   local dir="$1/vault/graphify/demo"
   mkdir -p "$dir"
-  # Alpha's members now sit at id 2, Beta's at id 1; id 3 is all new members.
-  printf '{"nodes":[%s,%s,%s],"links":[]}\n' \
+  # Alpha's members now sit at id 2, Beta's at id 1; id 3 is all new members;
+  # Delta's left id 7 (gone from graph.json) for id 4; id 9 is gone outright.
+  printf '{"nodes":[%s,%s,%s,%s],"links":[]}\n' \
     "$(seq_nodes 3 b 1 src/beta.ts)" "$(seq_nodes 3 a 2 src/alpha.ts)" "$(seq_nodes 3 x 3 src/x.ts)" \
-    >"$dir/graph.json"
+    "$(seq_nodes 3 d 4 src/delta.ts)" >"$dir/graph.json"
   {
     printf '# Graph Report - graphify/demo/graph.json\n\n'
     printf '## Community Hubs (Navigation)\n'
@@ -1136,7 +1137,9 @@ write_reconcile_mirror() { # box [crlf]
     printf '## Communities\n'
     printf '### Community 1 - "Alpha"\nNodes (3): a1, a2, a3\n\n'
     printf '### Community 2 - "Beta"\nNodes (3): b1, b2, b3\n\n'
-    printf '### Community 3 - "Gamma"\nNodes (3): g1, g2, g3\n'
+    printf '### Community 3 - "Gamma"\nNodes (3): g1, g2, g3\n\n'
+    printf '### Community 7 - "Delta"\nNodes (3): d1, d2, d3\n\n'
+    printf '### Community 9 - "Old Orphan"\nNodes (2): o1, o2\n'
   } >"$dir/demo-GRAPH_REPORT.md"
   crlf_if "$dir/demo-GRAPH_REPORT.md" "${2:-}"
 }
@@ -1150,9 +1153,22 @@ run_reconcile_suite() { # tag [crlf]
   assert_grep "reconcile-$tag/alpha-follows-its-members-to-2" '### Community 2 - "Alpha"' "$box/$REPORT_REL" \
     "report: [$(cat "$box/$REPORT_REL")]"
   assert_grep "reconcile-$tag/beta-follows-its-members-to-1" '### Community 1 - "Beta"' "$box/$REPORT_REL"
-  assert_grep "reconcile-$tag/gamma-demoted-to-placeholder" '### Community 3 - "Community 3"' "$box/$REPORT_REL"
+  # Cleared to a DERIVED name, not `Community 3`: a placeholder would lower the
+  # sync label guard's named-count floor (review finding).
+  assert_grep "reconcile-$tag/gamma-replaced-by-derived-name" '### Community 3 - "x"' "$box/$REPORT_REL"
   assert_not_grep "reconcile-$tag/gamma-name-gone" 'Gamma' "$box/$REPORT_REL"
   assert_grep "reconcile-$tag/demotion-is-reported" 'Gamma' "$box/err.txt"
+  assert_eq "reconcile-$tag/replacement-recorded-derived" "derived" \
+    "$(jexpr "$box/$SIDECAR_REL" "d.labels['3'].provenance")" "sidecar: [$(cat "$box/$SIDECAR_REL" 2>/dev/null)]"
+  assert_eq "reconcile-$tag/named-count-kept" "5" \
+    "$(node "$(to_native "$REPO_ROOT/brain/bin/label-guard.mjs")" --count "$(to_native "$box/$REPORT_REL")")"
+  # The moved name's orphan heading goes; an orphan whose name moved nowhere stays.
+  assert_grep "reconcile-$tag/delta-follows-its-members-to-4" '### Community 4 - "Delta"' "$box/$REPORT_REL"
+  assert_not_grep "reconcile-$tag/moved-orphan-heading-dropped" '### Community 7 - ' "$box/$REPORT_REL"
+  assert_grep "reconcile-$tag/unmoved-orphan-kept" '### Community 9 - "Old Orphan"' "$box/$REPORT_REL"
+  # Kept names get an anchor, so a sync-only mirror leaves the sample check.
+  assert_eq "reconcile-$tag/kept-names-anchored" "a1,a2,a3|b1,b2,b3|d1,d2,d3" \
+    "$(jexpr "$box/$SIDECAR_REL" "[d.anchors.alpha,d.anchors.beta,d.anchors.delta].map(String).join('|')")"
   status="$(run_stubs "$box")"
   cdir="$box/vault/graphify/demo/communities"
   assert_grep "reconcile-$tag/alpha-stub-holds-alpha-members" '"a1"' "$cdir/_COMMUNITY_Alpha.md" \
@@ -1170,14 +1186,15 @@ status="$(run_label "$box" --reconcile demo)"
 assert_eq "reconcile/current-report-exit-0" "0" "$status" "stderr: [$(cat "$box/err.txt")]"
 assert_files_identical "reconcile/current-report-untouched" "$box/report.before" "$box/$REPORT_REL"
 
-# A placeholder must not inherit a demoted name's stub filename: a prior stub
+# A placeholder must not inherit a named prior stub's filename: a prior stub
 # `_COMMUNITY_Gamma` whose members overlap the cluster now called `Community 3`
-# would keep resolving [[_COMMUNITY_Gamma]] to the wrong cluster.
+# would keep resolving [[_COMMUNITY_Gamma]] to a cluster without that name.
 box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
-write_reconcile_mirror "$box"
-mkdir -p "$box/vault/graphify/demo/communities"
+dir="$box/vault/graphify/demo"
+mkdir -p "$dir/communities"
+printf '{"nodes":[%s],"links":[]}\n' "$(seq_nodes 3 x 3 src/x.ts)" >"$dir/graph.json"
+printf '# Graph Report\n\n## Communities\n### Community 3 - "Community 3"\nNodes (3): x1, x2, x3\n' >"$dir/demo-GRAPH_REPORT.md"
 write_prior_stub "$box" "_COMMUNITY_Gamma" "Gamma" x1 x2 x3
-status="$(run_label "$box" --reconcile demo)"
 status="$(run_stubs "$box")"
 cdir="$box/vault/graphify/demo/communities"
 if [[ -f "$cdir/_COMMUNITY_Community 3.md" && ! -f "$cdir/_COMMUNITY_Gamma.md" ]]; then

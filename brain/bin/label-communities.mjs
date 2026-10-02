@@ -44,8 +44,9 @@
 //
 // --reconcile is the save-time half (sync-graph.sh runs it when it KEEPS the
 // vault report over a rebuilt graph.json): names follow their members to the
-// re-minted ids, and a name that describes no live cluster is demoted to its
-// `Community N` placeholder for /brain:label. No naming, no derived filler. It
+// re-minted ids, and a name that describes no live cluster is replaced by a
+// derived name (recorded 'derived', so /brain:label re-offers it). No agent
+// naming, and the sync label guard's named count never drops. It
 // exists because stubs regenerated straight from a kept report bound each old
 // name to whatever cluster now held its id (INNOV-346).
 //
@@ -501,9 +502,12 @@ function transformReport(m, finalLabels, preservedIds, keepLinkNames = new Set()
   // drop link entries that pointed at an orphan's label and nothing else, and
   // restate the `## Communities (N total, ...)` count over live ids. The
   // INNOV-274 write guard below compares live ids only, so this cannot trip it.
-  // --reconcile keeps them: an orphan heading binds no members, so it cannot
-  // poison a stub, and deleting names is /brain:label's call, not a sync's.
-  const orphanIds = new Set(dropOrphans ? [...m.reportLabels.keys()].filter((id) => !m.members.has(id)) : []);
+  // --reconcile passes a Set: only orphans whose name just moved to a live id go
+  // (left behind, the old heading would merge into that name's stub, and bind it
+  // again if graphify re-mints the id). Deleting the rest is /brain:label's call.
+  const orphanIds = new Set(
+    [...m.reportLabels.keys()].filter((id) => !m.members.has(id) && (dropOrphans === true || (dropOrphans instanceof Set && dropOrphans.has(id))))
+  );
   if (orphanIds.size) {
     const kept = [];
     let dropping = false;
@@ -783,21 +787,46 @@ if (argv.includes('--reconcile')) {
   const { preserved, remapped } = classify(repo, m);
   const finalLabels = { ...preserved };
   const preservedIds = new Set(Object.keys(preserved).map(Number).filter((id) => remapped[id] === undefined));
+  // A cleared name is replaced by a DERIVED one (dominant file), not `Community
+  // N`: derived names describe the cluster they sit on, count as named for the
+  // sync's label guard (a placeholder would lower its floor and let the next
+  // sync's incoming report overwrite the names that are still right), and are
+  // recorded 'derived' so /brain:label re-offers them for naming.
+  const taken = new Set([...Object.values(preserved), ...m.reportLabels.values()].map(nameKey));
   const demoted = [];
   for (const [id, label] of m.reportLabels) {
     if (!m.members.has(id) || preserved[id] !== undefined || !isNamedLabel(label) || !isStale(m, id)) continue;
-    finalLabels[id] = `Community ${id}`;
-    demoted.push(`${id} "${label}"`);
+    finalLabels[id] = deriveName(m.members.get(id), taken);
+    demoted.push({ id, from: label, to: finalLabels[id] });
   }
   const keepLinkNames = new Set(Object.values(remapped).map((r) => nameKey(r.label)));
-  const text = transformReport(m, finalLabels, preservedIds, keepLinkNames, { dropOrphans: false });
-  if (text === m.report) process.exit(0);
-  writeFileSync(m.reportPath, text, 'utf8');
+  const movedFrom = new Set(Object.values(remapped).map((r) => r.from));
+  const text = transformReport(m, finalLabels, preservedIds, keepLinkNames, { dropOrphans: movedFrom });
+
+  // Sidecar: record the derived replacements, and seed an anchor for every kept
+  // name that has none — without one, a mirror that only ever syncs would stay
+  // on the sample check, which a moved heading's refreshed sample defeats.
+  const p = join(m.dir, PROV_FILE);
+  let side;
+  try { side = JSON.parse(readFileSync(p, 'utf8')); } catch { side = null; }
+  if (side === null || typeof side !== 'object' || Array.isArray(side)) side = { repo, labels: {} };
+  side.labels = side.labels && typeof side.labels === 'object' ? side.labels : {};
+  side.anchors = side.anchors && typeof side.anchors === 'object' ? side.anchors : {};
+  let sideChanged = false;
+  for (const d of demoted) { side.labels[d.id] = { name: d.to, provenance: 'derived' }; sideChanged = true; }
+  for (const [id, label] of Object.entries(preserved)) {
+    const k = nameKey(label);
+    if (m.anchors.has(k) || side.anchors[k]) continue;
+    side.anchors[k] = [...new Set(m.members.get(Number(id)).map(nodeKey))].sort();
+    sideChanged = true;
+  }
+  if (text !== m.report) writeFileSync(m.reportPath, text, 'utf8');
+  if (sideChanged) { side.version = 2; writeFileSync(p, JSON.stringify(side, null, 2) + '\n', 'utf8'); }
   for (const [id, r] of Object.entries(remapped)) console.error(`reconcile ${repo}: "${r.label}" moved with its members, community ${r.from} -> ${id}`);
   if (demoted.length)
     console.error(
-      `reconcile ${repo}: ${demoted.length} name(s) no longer describe their cluster and were cleared to placeholders: ` +
-        `${demoted.join(', ')} — run /brain:label ${repo} to name them`
+      `reconcile ${repo}: ${demoted.length} name(s) no longer describe their cluster and were replaced by derived names: ` +
+        `${demoted.map((d) => `${d.id} "${d.from}" -> "${d.to}"`).join(', ')} — run /brain:label ${repo} to name them`
     );
   process.exit(0);
 }
