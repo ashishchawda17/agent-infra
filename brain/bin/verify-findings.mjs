@@ -22,7 +22,8 @@
 //   against --max. A carried item needs no subagent.
 //
 // record — merges this run's verdicts, one JSON object per line:
-//   {note, kind: "claim"|"dead-link", target?, verdict, reason,
+//   {note, kind: "claim"|"dead-link", target?, verdict, replacement? (required
+//    for found/draft), reason,
 //    subtype? (required for cannot-tell), drift? ([{old, new}], required for
 //    line-drift), evidence?: {refs: ["repo/path:line"], branch, sha}}
 //   Run it after the edits are applied: each record's `blob` is the note as it is
@@ -94,6 +95,7 @@ function validate(v) {
   if (v.kind === 'dead-link' && !v.target) bad.push('target');
   if (!VERDICTS[v.kind].includes(v.verdict)) bad.push(`verdict ${JSON.stringify(v.verdict)} for ${v.kind}`);
   if (typeof v.reason !== 'string' || !v.reason) bad.push('reason');
+  if ((v.verdict === 'found' || v.verdict === 'draft') && !v.replacement) bad.push('replacement');
   if (v.verdict === 'cannot-tell' && !SUBTYPES.includes(v.subtype)) bad.push(`subtype ${JSON.stringify(v.subtype)}`);
   if (v.subtype === 'line-drift' && !(Array.isArray(v.drift) && v.drift.length &&
       v.drift.every((p) => p && p.old != null && p.new != null))) bad.push('drift (old→new pairs)');
@@ -147,7 +149,7 @@ function main(argv) {
   for (const v of fresh) {
     out.set(keyOf(v), {
       note: v.note, kind: v.kind, ...(v.target ? { target: v.target } : {}),
-      verdict: v.verdict, reason: v.reason,
+      verdict: v.verdict, ...(v.replacement ? { replacement: v.replacement } : {}), reason: v.reason,
       ...(v.subtype ? { subtype: v.subtype } : {}), ...(v.drift ? { drift: v.drift } : {}),
       evidence: v.evidence || null, blob: blobOf(vault, v.note), date, pr,
     });

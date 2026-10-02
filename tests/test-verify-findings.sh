@@ -83,6 +83,11 @@ printf 'x
 record; rc=$?
 check "record/refuses-path-escape" "$([[ $rc -ne 0 && ! -e "$FIND" ]]; echo $?)" "rc=$rc out: [$(cat "$TMPROOT/r.txt")]"
 
+printf '%s
+' '{"note":"wiki/d.md","kind":"dead-link","target":"Gone Target","verdict":"draft","reason":"no replacement named"}' >"$TMPROOT/v.jsonl"
+record; rc=$?
+check "record/refuses-draft-without-replacement" "$([[ $rc -ne 0 && ! -e "$FIND" ]]; echo $?)" "rc=$rc out: [$(cat "$TMPROOT/r.txt")]"
+
 # --- 3. record one per judged item --------------------------------------------
 cat >"$TMPROOT/v.jsonl" <<'EOF'
 {"note":"wiki/a.md","kind":"claim","verdict":"cannot-tell","subtype":"line-drift","drift":[{"old":"src/x.ts:10","new":"src/x.ts:14"}],"reason":"LINE DRIFT: moved","evidence":{"refs":["repo/src/x.ts:14"],"branch":"main","sha":"abc1234"}}
@@ -130,6 +135,11 @@ scan; record; rc=$?
 check "record/prunes-applied" "$([[ $rc -eq 0 && "$(field wiki/a.md 'r')" == MISSING ]]; echo $?)" "a: [$(field wiki/a.md 'JSON.stringify(r)')]"
 check "record/keeps-this-run" "$([[ "$(field wiki/c.md 'r.verdict+"|"+r.pr')" == 'holds|null' ]]; echo $?)" "c: [$(field wiki/c.md 'JSON.stringify(r)')]"
 check "record/keeps-still-queued" "$([[ "$(field wiki/d.md 'r.verdict')" == none ]]; echo $?)" "d: [$(field wiki/d.md 'JSON.stringify(r)')]"
+
+printf '%s
+' '{"note":"wiki/d.md","kind":"dead-link","target":"Gone Target","verdict":"draft","replacement":"gone-target-draft","reason":"only a draft"}' >"$TMPROOT/v.jsonl"
+record
+check "record/keeps-replacement" "$([[ "$(field wiki/d.md 'r.verdict+"|"+r.replacement')" == 'draft|gone-target-draft' ]]; echo $?)" "d: [$(field wiki/d.md 'JSON.stringify(r)')]"
 
 # --- 8. the file is on the save path ------------------------------------------
 check "saveinclude/logs" "$(grep -qx 'logs/' "$REPO_ROOT/brain/templates/saveinclude"; echo $?)" "logs/ missing from brain/templates/saveinclude"
