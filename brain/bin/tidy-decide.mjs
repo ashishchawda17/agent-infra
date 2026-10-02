@@ -184,7 +184,8 @@ function anchorQuestions(vault, scan, verify) {
       ...cands.map((c) => ({ label: c.src, description: c.why, apply: [edit(c.src)] })),
       // A wrong-repo anchor is fixed by qualifying it, never by switching its
       // check off: source_untracked would hide the mismatch, not resolve it.
-      ...(it.state === 'mismatch' ? [] : [{ label: 'Mark source_untracked', description: 'absence of a tracked file is the documented fact', apply: [{ id, kind: 'untracked', note }] }]),
+      // With no source: at all the flag marks nothing; the note stays anchorless.
+      ...(it.state === 'mismatch' || !it.from ? [] : [{ label: 'Mark source_untracked', description: 'absence of a tracked file is the documented fact', apply: [{ id, kind: 'untracked', note }] }]),
       { label: 'Leave', description: 'no change; stays in the queue', apply: [{ id, kind: 'leave' }] },
     ];
     // AskUserQuestion needs two options; a lone "Leave" is not a question.
@@ -355,6 +356,8 @@ function applyEdit(vault, ctx, targets, e) {
   let next;
   if (e.kind === 'anchor') {
     if (typeof e.to !== 'string' || /[\r\n;]/.test(e.to) || !e.to.trim()) throw new Error('anchor must be one path');
+    // `alpha/../x` would verify against whatever file it lands on, outside alpha.
+    if (e.to.split(/[/\\]/).some((s) => s === '..' || s === '.')) throw new Error('anchor may not contain . or .. segments');
     const alias = folderAlias(ctx, e.to);
     if (alias) throw new Error(`\`${e.to.split(/[/:]/)[0]}\` is a folder name for repo \`${alias}\`; anchor as ${alias}/… (not written)`);
     const r = classifyAnchors(ctx, { rel: e.note, source: e.to });
@@ -369,6 +372,8 @@ function applyEdit(vault, ctx, targets, e) {
     if (next == null) throw new Error(e.from ? `source: no longer contains \`${e.from}\`` : 'note already has a source:');
   } else if (e.kind === 'untracked') {
     const fm = parseFrontmatter(text);
+    // The flag qualifies an anchor; with no source: the note still has none.
+    if (!fm.source) throw new Error('note has no source: to mark untracked');
     if (classifyAnchors(ctx, { rel: e.note, source: fm.source }).some((a) => a.state === 'mismatch'))
       throw new Error('source: is in another repo than the note\'s area; qualify it, do not mark it untracked');
     next =editFrontmatter(text, (fm, eol) => (/^source_untracked:/m.test(fm) ? fm.replace(/^source_untracked:.*$/m, 'source_untracked: true') : `${fm}${eol}source_untracked: true`));

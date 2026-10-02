@@ -146,7 +146,7 @@ check "anchor/cross-repo-basename" "$([[ "$(labels anchor:wiki/misc/cross2.md)" 
 check "anchor/wrong-repo-not-offered" "$([[ "$(labels anchor:wiki/alpha/cross.md)" != *beta/* && "$(labels anchor:wiki/alpha/cross.md)" != NOQUESTION ]]; echo $?)" "got: [$(labels anchor:wiki/alpha/cross.md)]"
 check "anchor/registered-name-not-folder" "$([[ "$(labels anchor:wiki/misc/tool.md)" == gamma/bin/tool.sh\|* && "$(labels anchor:wiki/misc/tool.md)" != *gamma-folder* ]]; echo $?)" "got: [$(labels anchor:wiki/misc/tool.md)]"
 check "anchor/wrong-repo-no-untracked" "$([[ "$(labels anchor:wiki/alpha/wrongrepo.md)" == 'alpha/docs/guide.md|Leave' ]]; echo $?)" "got: [$(labels anchor:wiki/alpha/wrongrepo.md)]"
-check "anchor/no-source-body-path" "$([[ "$(labels anchor:wiki/alpha/nosrc.md)" == *alpha/docs/guide.md* ]]; echo $?)" "got: [$(labels anchor:wiki/alpha/nosrc.md)]"
+check "anchor/no-source-body-path" "$([[ "$(labels anchor:wiki/alpha/nosrc.md)" == *alpha/docs/guide.md* && "$(labels anchor:wiki/alpha/nosrc.md)" != *untracked* ]]; echo $?)" "got: [$(labels anchor:wiki/alpha/nosrc.md)]"
 check "anchor/unverifiable-has-untracked" "$([[ "$(labels anchor:wiki/alpha/session.md)" == *untracked* ]]; echo $?)" "got: [$(labels anchor:wiki/alpha/session.md)]"
 check "tag/pair" "$([[ "$(labels tag-pair:constraint+constraints)" == constraint\|constraints\|* ]]; echo $?)" "got: [$(labels tag-pair:constraint+constraints)] q: [$(qdump | grep tag)]"
 check "tag/lone-has-existing-tag" "$([[ "$(labels tag:wiki/alpha/nosrc.md:bash-tricks)" == shell\|* || "$(labels tag:wiki/alpha/nosrc.md:bash-tricks)" == *ops* ]]; echo $?)" "got: [$(labels tag:wiki/alpha/nosrc.md:bash-tricks)]"
@@ -207,7 +207,9 @@ pick tag:wiki/alpha/nosrc.md:bash-tricks 'Drop tag'
 pick 'link:wiki/alpha/linker.md:_COMMUNITY_Aliased Label' 'Remove link'
 pick anchor:wiki/alpha/nosrc.md alpha/docs/guide.md
 pick anchor:wiki/alpha/cross.md 'Mark source_untracked'
+printf '%s\n' '{"id":"anchor:wiki/alpha/session.md","kind":"anchor","note":"wiki/alpha/session.md","from":"verified-in-session/2026-09-16","to":"alpha/../beta/tools/helper.sh"}' >>"$TMPROOT/a.jsonl"
 BRAIN_ROOT="$VAULT" node "$TD" apply "$Q" "$TMPROOT/a.jsonl" >"$TMPROOT/apply.out" 2>&1
+check "apply/negative-control-dotdot" "$(cmp -s "$VAULT/wiki/alpha/session.md" "$TMPROOT/session.before" && grep -q '^REFUSED anchor:wiki/alpha/session.md: anchor may not contain' "$TMPROOT/apply.out"; echo $?)" "out: [$(cat "$TMPROOT/apply.out")]"
 check "apply/source-inserted" "$(grep -q '^source: alpha/docs/guide.md$' "$VAULT/wiki/alpha/nosrc.md" && [[ "$(sed -n 1p "$VAULT/wiki/alpha/nosrc.md")" == --- ]]; echo $?)" "note: [$(cat "$VAULT/wiki/alpha/nosrc.md")]"
 check "apply/untracked-set" "$(sed -n '/^---$/,/^---$/p' "$VAULT/wiki/alpha/cross.md" | grep -q '^source_untracked: true$'; echo $?)" "note: [$(cat "$VAULT/wiki/alpha/cross.md")]"
 check "apply/drop-tag" "$(grep -q '^tags: \[shell\]$' "$VAULT/wiki/alpha/nosrc.md"; echo $?)" "note: [$(cat "$VAULT/wiki/alpha/nosrc.md")] out: [$(cat "$TMPROOT/apply.out")]"
