@@ -53,7 +53,8 @@ Read the report and split every finding into **auto-fixable** vs **judgment** (b
 
 **Judgment (present, do NOT fix):**
 
-- Dead `[[wikilinks]]` (is the fact gone, or the note unwritten?), stale `last_verified` (needs re-verification against code), low `confidence`: these three are `/brain:verify`'s queue, so point the user there. Also any broken source whose repo isn't cloned locally at all (the fix is a clone, not a rewrite), note deletion/archival of any kind, singleton tags with no clear canonical.
+- Dead `[[wikilinks]]` (is the fact gone, or the note unwritten?), stale `last_verified` (needs re-verification against code), low `confidence`: these three are `/brain:verify`'s queue, so point the user there. The exception is a dead `[[_COMMUNITY_*]]` stub link, which step 3b asks about. Also any broken source whose repo isn't cloned locally at all (the fix is a clone, not a rewrite), and note deletion/archival of any kind.
+- Ambiguous anchors (several candidates, a cross-repo move, a session or gitignored-chat source, no `source:` at all), singleton tags with no clear canonical, and dead stub links are not fixed here, but they are not dropped either: step 3b asks the user about each one.
 
 ### 2b. Check for open PRs touching the same notes
 
@@ -76,12 +77,32 @@ Intersect with every note in the planned batch, plus `wiki/index.md`.
 
 Before touching anything, show the full plan compactly: N anchors rewritten (with the prefix rule), M hub notes created (named, with member counts), K tag folds (old→new), and the judgment items left for the user. **Wait for a yes.** If the user pre-authorized ("just fix the obvious ones"), proceed.
 
+### 3b. Decide the judgment items, in batches
+
+Apply step 3's batch first (step 4.1–4.2), then turn what is left into questions. `tidy-decide.mjs` finds the candidates; you ask and it applies. Scan as data, after the batch, so the questions see the batch's result:
+
+```bash
+F="$(mktemp)"; Q="$(mktemp)"; A="$(mktemp)"
+node "${CLAUDE_PLUGIN_ROOT}/bin/freshness.mjs" --json > "$F"                 # writes no logs/ report
+node "${CLAUDE_PLUGIN_ROOT}/bin/tidy-decide.mjs" questions "$F" > "$Q"   # from the vault root, or with BRAIN_ROOT=<vault> set
+```
+
+Each line of `$Q` is one question: `{id, group, header, question, options: [{label, description, apply}]}`, already 2–4 options with real candidates first (rename history, same-named files in other registered repos, paths the note names, `/brain:verify`'s saved evidence; similar or area-common tags; current stubs ranked by member overlap with the deleted one). Ask them with `AskUserQuestion`, **4 per call, one group at a time** (`tag-pair`, then `tag`, then `anchor`, then `link`), passing `header`, `question` and each option's `label`/`description` through unchanged. Do not invent options; "Other" is added for you.
+
+For each answer, append the chosen option's `apply` objects to `$A`, one JSON object per line, verbatim. For an "Other" answer, write one object yourself with the question's `id`: `{"id", "kind": "anchor", "note", "from"?, "to": "<typed path>"}` (copy `from` from the question's other edits), `{"id", "kind": "tag", "note", "from", "to"}`, or `{"id", "kind": "link", "note", "from", "to"}`. A skipped question gets no line. Then:
+
+```bash
+node "${CLAUDE_PLUGIN_ROOT}/bin/tidy-decide.mjs" apply "$Q" "$A"
+```
+
+It prints `TIDY-DECIDE: <n> applied, <n> refused, <n> left, <n> unanswered`, then one line per item. An anchor is written only if it classifies `verified` for that note (the resolver `check-anchors.mjs` uses), so a typed path that does not exist, sits in another repo than the note's area, or uses a checkout's folder name instead of its `repos.json` name is `REFUSED` and the note is not touched. Re-ask a refused anchor once with the reason; if the second answer is refused too, leave it. Every edit is frontmatter (`source:`, `source_untracked:`, `tags:`) or `[[link]]` text; bodies are never edited. Carry every `UNANSWERED` and `REFUSED` line into the PR body as the remaining queue. If the user declines the whole pass, skip it; the judgment items go into the PR body as before.
+
 ### 4. Apply on a branch
 
 1. Stay on the working branch step 0's `session.sh --start` put you on. Do not create another: the pin names that branch, and `vault-commit.sh` refuses a commit from any other.
-2. Apply the batch: `source:` rewrites and tag folds are frontmatter-only edits; hub notes are new files plus their `wiki/index.md` lines.
-3. **Verify by re-running the freshness scan** — the fixed categories' counts must drop and no new dead links may appear (a hub note with a typo'd `[[link]]` creates one; fix before shipping).
-4. Commit through `vault-commit.sh --pr-paths`, naming every edited or created note: `bash "${CLAUDE_PLUGIN_ROOT}/bin/vault-commit.sh" -m "tidy: <date>" --pin "<step 0's pin>" --pr-paths <each path>`. On `VAULT-COMMIT: REFUSED`, stop and relay its first line. Never commit with raw `git`, and never pass `--force-commit`. Then open a PR per the vault's convention. Report before/after counts and the remaining judgment queue in the PR body and to the user.
+2. Apply the batch: `source:` rewrites and tag folds are frontmatter-only edits; hub notes are new files plus their `wiki/index.md` lines. Then run step 3b.
+3. **Verify by re-running the freshness scan** — the fixed and answered categories' counts must drop and no new findings may appear (a hub note with a typo'd `[[link]]` creates a dead link; fix before shipping).
+4. Commit through `vault-commit.sh --pr-paths`, naming every edited or created note (step 3b's included): `bash "${CLAUDE_PLUGIN_ROOT}/bin/vault-commit.sh" -m "tidy: <date>" --pin "<step 0's pin>" --pr-paths <each path>`. On `VAULT-COMMIT: REFUSED`, stop and relay its first line. Never commit with raw `git`, and never pass `--force-commit`. Then open a PR per the vault's convention. Report before/after counts and the remaining judgment queue in the PR body and to the user.
 
 ### 5. Close the session record
 
