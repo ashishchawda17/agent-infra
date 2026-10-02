@@ -621,6 +621,59 @@ assert_eq "cas/intruder-parent-is-before" "$before" "$(git -C "$VAULT" rev-parse
 assert_eq "cas/shared-index-unchanged" "$index_before" "$(git -C "$VAULT" ls-files -s | tr '\n' '|')" "$(evidence)"
 assert_contains "cas/explains" "HEAD moved" "$(out_all)" "$(evidence)"
 
+# --- 21d4b. a branch CHECKOUT mid-run refuses, too ---------------------------
+# A checkout to a new branch at the same SHA passes the ref CAS, so the run
+# re-checks where HEAD points before it moves the ref.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+make_dirty
+before="$(head_sha)"
+make_git_wrap "'$REAL_GIT' checkout -q -b other"
+run_guard -m "loses the race"
+GIT_WRAP=""
+assert_eq "cas/checkout-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "cas/checkout-pinned-branch-unmoved" "$before" "$(git -C "$VAULT" rev-parse brain/work)" "$(evidence)"
+assert_eq "cas/checkout-new-branch-unmoved" "$before" "$(git -C "$VAULT" rev-parse other 2>/dev/null)" "$(evidence)"
+
+# --- 21d4c. a pre-staged allowlisted path outside this run's entries stays out --
+# The private index is based on HEAD, so the commit carries only what this run
+# staged; the other session's path stays staged for it.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+echo "their log" >"$VAULT/logs/other.md"
+git -C "$VAULT" add logs/other.md >/dev/null 2>&1                # "another session"
+make_dirty
+run_guard -m "subset" -- wiki/log.md
+assert_eq "base/subset-commits" "0" "$STATUS" "$(evidence)"
+assert_eq "base/pre-staged-not-swept-in" "" "$(git -C "$VAULT" ls-tree --name-only HEAD logs/other.md)" "$(evidence)"
+assert_eq "base/pre-staged-left-for-owner" "logs/other.md" "$(staged_list | tr -d '\r')" "$(evidence)"
+
+# --- 21d4d. a STALE shared index cannot revert an earlier commit -------------
+# If the post-commit index sync fails (lock held, crash), the shared index keeps
+# pre-commit entries. Copy-based staging committed that stale state as a revert.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+echo "a" >"$VAULT/logs/a.md"
+run_guard -m "first" -- logs/
+git -C "$VAULT" reset -q HEAD~ -- logs/a.md >/dev/null 2>&1      # the sync that never ran
+make_dirty
+run_guard -m "second" -- wiki/log.md
+assert_eq "stale/second-commits" "0" "$STATUS" "$(evidence)"
+assert_eq "stale/first-commit-not-reverted" "logs/a.md" "$(git -C "$VAULT" ls-tree --name-only HEAD logs/a.md)" "$(evidence)"
+
+# --- 21d4e. commit.gpgsign is honoured: a failing signer refuses -------------
+# commit-tree signs only with -S. Without passing it on, a vault that requires
+# signing would get unsigned commits where `git commit` refuses.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+git -C "$VAULT" config commit.gpgsign true
+git -C "$VAULT" config gpg.program false
+make_dirty
+before="$(head_sha)"
+run_guard -m "must be signed"
+assert_eq "sign/refused" "1" "$STATUS" "$(evidence)"
+assert_eq "sign/head-unmoved" "$before" "$(head_sha)" "$(evidence)"
+
 # --- 21d5. a successful commit leaves the shared index in line with HEAD -----
 # The committed paths are reset to the new commit in the shared index; without
 # that, the index still holds the old blob and a later commit reverts it.

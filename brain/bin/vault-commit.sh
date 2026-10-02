@@ -125,22 +125,28 @@
 #
 # NOTHING IS STAGED ON A REFUSAL (INNOV-375). The shared index is never written
 # before the commit lands. The run copies it to a private index under the vault's
-# .git/, stages and verifies there, and commits the verified TREE OBJECT with
-# `git commit-tree`, so the commit is exactly the tree that was checked: a path
-# another session stages mid-run is not in it. The branch moves by compare-and-
-# swap (`git update-ref <ref> <new> <old>`), so a HEAD that moved since step 4
-# refuses atomically. Every refusal leaves the shared index as it was.
-# Only after the ref moves are the committed paths reset to the new commit in
-# the shared index; every other staged path is left alone. The limits:
-#   - the copy carries what was already staged under the allowlist, so the
-#     commit includes another session's pre-staged allowlisted paths, as
-#     `git commit` always did.
-#   - a committed path that another session re-stages between the copy and the
-#     sync is reset to the committed version.
-#   - if that sync cannot take the index lock, the commit stands and the output
-#     prints the command that brings the index back in line.
-# `commit-tree` runs no pre-commit / commit-msg / post-commit hooks; no vault
-# uses them. It does honour commit.gpgsign, as `git commit` does.
+# .git/ and checks what is already staged there (the refusals above), then resets
+# that copy to HEAD, stages into it, and commits the verified TREE OBJECT with
+# `git commit-tree`. The commit is exactly the tree that was checked: HEAD plus
+# what this run staged from the working tree. Nothing from the shared index, a
+# path another session stages mid-run or a stale entry, can reach it. The branch
+# moves by compare-and-swap (`git update-ref <ref> <new> <old>`), after a last
+# check that HEAD still points at that ref, so a moved HEAD refuses. Every
+# refusal leaves the shared index as it was.
+# After the ref moves, the committed paths are reset to the new commit in the
+# shared index; every other staged path is left alone. The limits:
+#   - a path another session pre-staged is committed only if it falls under an
+#     entry this run stages, and then with its working-tree content. Before
+#     INNOV-375 `git commit` swept in every pre-staged allowlisted path.
+#   - a branch checkout between the last HEAD check and `update-ref` (a few
+#     milliseconds) still lands the commit on the ref the run was pinned to.
+#   - a committed path another session re-stages before the sync is reset to
+#     the committed version.
+#   - if the sync cannot take the index lock, the commit stands, and the output
+#     prints the runnable command that brings the shared index back in line.
+# `commit-tree` runs no pre-commit / commit-msg / post-commit hooks (no vault
+# was found using them), and signs only with -S, so commit.gpgsign is read and
+# passed on by hand.
 set -uo pipefail
 
 VAULT="${BRAIN_ROOT:-${CLAUDE_PROJECT_DIR:-$PWD}}"
@@ -430,6 +436,7 @@ PRIVATE_INDEX="$(mktemp "$GIT_DIR_ABS/vault-commit-index.XXXXXX")" ||
   refuse "could not create a private index under '$GIT_DIR_ABS'"
 trap 'rm -f "$PRIVATE_INDEX" "$PRIVATE_INDEX.lock"' EXIT
 git_private() { GIT_INDEX_FILE="$PRIVATE_INDEX" git -C "$VAULT" "$@"; }
+UNTOUCHED="  Nothing was committed, and the shared index was not touched."
 if [[ -f "$GIT_DIR_ABS/index" ]]; then
   cp "$GIT_DIR_ABS/index" "$PRIVATE_INDEX" || refuse "could not copy the shared index"
 else # a zero-byte file is a corrupt index, not an empty one
@@ -482,6 +489,11 @@ done
 if [[ ${#foreign[@]} -gt 0 ]]; then
   refuse_foreign "  This run staged nothing: the check runs before the first 'git add'." "${foreign[@]}"
 fi
+# Now base the private index on HEAD, so the commit is HEAD plus what this run
+# stages and nothing from the shared index, stale or not, can reach it. A
+# single-tree `read-tree -m` keeps the stat cache for unchanged entries.
+git_private read-tree -m "$CUR_SHA" >/dev/null 2>&1 ||
+  refuse "could not reset the private index to HEAD (unmerged paths?)" "$UNTOUCHED"
 
 # --- 6. stage, into the private index ---------------------------------------
 # Entries that match nothing in the working tree are skipped rather than passed
@@ -503,7 +515,6 @@ entry_exists() { # vault-relative entry
   return 1
 }
 
-UNTOUCHED="  Nothing was committed, and the shared index was not touched."
 staged_any=0
 for entry in "${PATHS[@]}"; do
   # PR mode stages a named deletion too; git add refuses a path that never existed.
@@ -554,8 +565,22 @@ fi
 # `git commit -m` cleans whitespace; commit-tree takes the message verbatim.
 MESSAGE="$(printf '%s\n' "$MESSAGE" | git stripspace)"
 [[ -n "$MESSAGE" ]] || refuse "the commit message is only whitespace"
-if ! NEW="$(git -C "$VAULT" commit-tree "$TREE" -p "$CUR_SHA" -m "$MESSAGE" 2>&1)"; then
+# commit-tree signs only when asked, so carry commit.gpgsign over by hand: a
+# vault that requires signed commits must refuse, as `git commit` does.
+SIGN=""
+[[ "$(git -C "$VAULT" config --type=bool commit.gpgsign 2>/dev/null)" == true ]] && SIGN="-S"
+if ! NEW="$(git -C "$VAULT" commit-tree ${SIGN:+"$SIGN"} "$TREE" -p "$CUR_SHA" -m "$MESSAGE" 2>&1)"; then
   refuse "git commit-tree failed" "$(printf '    %s\n' "$NEW")" "$UNTOUCHED"
+fi
+# The CAS below checks the ref, not where HEAD points. A checkout to another
+# branch at the same SHA would pass it and land this commit on a branch the
+# checkout already left, so re-check HEAD as late as possible.
+if [[ "$(git -C "$VAULT" symbolic-ref -q HEAD 2>/dev/null || echo HEAD)" != "$REF" ]]; then
+  refuse "the vault's HEAD moved while this command was running" \
+    "  HEAD was $REF, and is now $(git -C "$VAULT" symbolic-ref -q HEAD 2>/dev/null || echo 'detached')." \
+    "  Another session changed branches underneath this run." \
+    "$UNTOUCHED" \
+    "  Re-check the branch, then re-run the command."
 fi
 if ! cas_err="$(git -C "$VAULT" update-ref -m "commit: ${MESSAGE%%$'\n'*}" "$REF" "$NEW" "$CUR_SHA" 2>&1)"; then
   refuse "the vault's HEAD moved while this command was running" \
@@ -571,15 +596,22 @@ echo "VAULT-COMMIT: OK - committed ${#STAGED[@]} path(s) on '$CUR_BRANCH'"
 printf '  %s\n' "${STAGED[@]}"
 
 # --- 9. bring the shared index in line, for the committed paths only --------
-# Until this runs, the shared index holds the pre-commit blobs for them, and a
-# later subset commit would carry those back as a revert.
+# Until this runs, the shared index holds the pre-commit blobs for them, so
+# `git status` shows them as staged reverts. No vault commit can carry those
+# (step 5 bases on HEAD), but a raw `git commit` would. Retried: the lock is
+# usually held for milliseconds.
+sync_index() {
+  printf '%s\0' "${STAGED[@]}" | git --literal-pathspecs -C "$VAULT" \
+    reset -q "$NEW" --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1
+}
 if [[ "$(git -C "$VAULT" symbolic-ref -q HEAD 2>/dev/null || echo HEAD)" != "$REF" ]]; then
   echo "  NOTE: the checkout left '$REF' during the commit; its index was not changed."
-elif ! printf '%s\0' "${STAGED[@]}" | git --literal-pathspecs -C "$VAULT" \
-       reset -q "$NEW" --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1; then
+elif ! { sync_index || { sleep 1; sync_index; } || { sleep 2; sync_index; }; }; then
   echo "  WARNING: the shared index is locked and still holds the pre-commit versions"
-  echo "  of the paths above, so a later commit would revert them. Run now:"
-  echo "    git -C \"$VAULT\" reset -q HEAD -- <the paths above>"
+  echo "  of the paths above (shown as staged reverts in git status). Run:"
+  printf '    git -C %q reset -q HEAD --' "$VAULT"
+  printf ' %q' "${STAGED[@]}"
+  echo
 fi
 echo "  Push when ready: git -C \"$VAULT\" push"
 exit 0
