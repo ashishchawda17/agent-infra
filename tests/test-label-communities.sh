@@ -1018,6 +1018,251 @@ suffixed="$(find "$cdir" -maxdepth 1 -name '* ([0-9]*).md' 2>/dev/null | wc -l |
 assert_eq "rename-heal/no-suffixed-stub-survives" "0" "$suffixed" \
   "found: [$(find "$cdir" -maxdepth 1 -name '* ([0-9]*).md' 2>/dev/null | tr '\n' ' ')]"
 
+# ================================================================= PART K ===
+# INNOV-346: a kept name is re-checked against its cluster's CURRENT members on
+# every digest. Three ways a name stopped describing its cluster while the old
+# 12-member-sample containment rule kept calling it current:
+#   K1 a path-derived name whose file is no longer in the cluster;
+#   K2 a cluster that lost most of its members while its sample survived;
+#   K3 a name remapped step by step (each step >= 0.5 of the last, refreshed
+#      sample) until it sat on an unrelated cluster — the anchor recorded at
+#      naming time is what stops that ratchet.
+# K4 is the sync-time half: --reconcile moves names to re-minted ids and
+# demotes the ones that describe nothing, before stubs are regenerated.
+
+echo "--- K. kept names re-checked against current members (INNOV-346) ---"
+
+crlf_if() { if [[ "${2:-}" == crlf ]]; then sed -i 's/\r*$/\r/' "$1"; fi; }
+
+# n1..n$1 as a comma list
+seq_list() { local i out=""; for ((i = 1; i <= $1; i++)); do out="$out${out:+, }$2$i"; done; printf '%s' "$out"; }
+seq_nodes() { # count prefix community file
+  local i sep=""
+  for ((i = 1; i <= $1; i++)); do
+    printf '%s{"id":"%s%d","label":"%s%d","community":%d,"source_file":"%s"}' "$sep" "$2" "$i" "$2" "$i" "$3" "$4"
+    sep=","
+  done
+}
+
+run_recheck_suite() { # tag [crlf]
+  local tag="$1" crlf="${2:-}" box dir status
+  box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+  dir="$box/vault/graphify/demo"
+  mkdir -p "$dir"
+  # 0: path name, its file gone (members now from app/help).
+  # 1: path name, its file still present (control).
+  # 2: 30 named nodes shrank to the 12 the report sampled.
+  # 3: 30 named nodes, all still there (control).
+  {
+    printf '{"nodes":['
+    printf '{"id":"p1","label":"p1","community":0,"source_file":"app/help/_components/a.tsx"},'
+    printf '{"id":"p2","label":"p2","community":0,"source_file":"app/help/_components/b.tsx"},'
+    printf '{"id":"l1","label":"l1","community":1,"source_file":"src/live/file.ts"},'
+    printf '{"id":"l2","label":"l2","community":1,"source_file":"src/live/file.ts"},'
+    seq_nodes 12 s 2 src/shrunk.ts; printf ','
+    seq_nodes 30 k 3 src/kept.ts
+    printf '],"links":[]}\n'
+  } >"$dir/graph.json"
+  {
+    printf '# Graph Report - graphify/demo/graph.json\n\n## Communities\n'
+    printf '### Community 0 - "docs/ARCHITECTURE_MAP.md"\nNodes (2): p1, p2\n\n'
+    printf '### Community 1 - "src/live/file.ts"\nNodes (2): l1, l2\n\n'
+    printf '### Community 2 - "Shrunk Cluster"\nNodes (30): %s (+18 more)\n\n' "$(seq_list 12 s)"
+    printf '### Community 3 - "Kept Cluster"\nNodes (30): %s (+18 more)\n' "$(seq_list 12 k)"
+  } >"$dir/demo-GRAPH_REPORT.md"
+  crlf_if "$dir/demo-GRAPH_REPORT.md" "$crlf"
+
+  status="$(run_label "$box" --digest demo)"
+  assert_eq "recheck-$tag/digest-exit-0" "0" "$status" "stderr: [$(cat "$box/err.txt")]"
+  cp "$box/out.txt" "$box/d.json"
+  assert_eq "recheck-$tag/path-name-without-its-file-goes-to-batches" "true|false" \
+    "$(jexpr "$box/d.json" "('0' in d[0].labels_template)+'|'+('0' in d[0].preserved)")" \
+    "digest: [$(head -c 900 "$box/d.json")]"
+  assert_eq "recheck-$tag/path-name-with-its-file-kept" "src/live/file.ts" \
+    "$(jexpr "$box/d.json" "d[0].preserved['1']")"
+  assert_eq "recheck-$tag/shrunk-cluster-goes-to-batches" "true|false" \
+    "$(jexpr "$box/d.json" "('2' in d[0].labels_template)+'|'+('2' in d[0].preserved)")"
+  assert_eq "recheck-$tag/intact-cluster-kept" "Kept Cluster" \
+    "$(jexpr "$box/d.json" "d[0].preserved['3']")"
+}
+
+run_recheck_suite lf
+run_recheck_suite crlf crlf
+
+# --- K3. the anchor: a name is checked against the members it was GIVEN for ---
+anchor_graph() { # file c0-members-json-fragment
+  printf '{"nodes":[%s],"links":[]}\n' "$2" >"$1"
+}
+box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+dir="$box/vault/graphify/demo"
+mkdir -p "$dir"
+anchor_graph "$dir/graph.json" "$(seq_nodes 4 a 0 src/alpha.ts)"
+printf '# Graph Report - graphify/demo/graph.json\n\n## Communities\n### Community 0 - "Community 0"\nNodes (4): a1, a2, a3, a4\n' \
+  >"$dir/demo-GRAPH_REPORT.md"
+status="$(run_apply "$box" '{"0":"Alpha Cluster"}')"
+assert_eq "anchor/apply-exit-0" "0" "$status" "stderr: [$(cat "$box/err.txt")]"
+assert_eq "anchor/sidecar-records-members-for-the-name" "a1,a2,a3,a4" \
+  "$(jexpr "$box/$SIDECAR_REL" "(d.anchors['alpha cluster']||[]).join(',')")" \
+  "sidecar: [$(cat "$box/$SIDECAR_REL")]"
+# Drift: only a1,a2 survive, joined by six strangers; and the report's sample
+# line was refreshed to the new members (what a remap does to it), so the
+# sample alone says "current".
+anchor_graph "$dir/graph.json" "$(seq_nodes 2 a 0 src/alpha.ts),$(seq_nodes 6 z 0 src/zeta.ts)"
+printf '# Graph Report - graphify/demo/graph.json\n\n## Communities\n### Community 0 - "Alpha Cluster"\nNodes (8): a1, a2, z1, z2, z3, z4, z5, z6\n' \
+  >"$dir/demo-GRAPH_REPORT.md"
+status="$(run_label "$box" --digest demo)"
+cp "$box/out.txt" "$box/d.json"
+assert_eq "anchor/drifted-name-goes-to-batches" "true|false" \
+  "$(jexpr "$box/d.json" "('0' in d[0].labels_template)+'|'+('0' in d[0].preserved)")" \
+  "digest: [$(head -c 900 "$box/d.json")]"
+# Control: the same drift without the sidecar is invisible to the sample rule.
+rm -f "$box/$SIDECAR_REL"
+status="$(run_label "$box" --digest demo)"
+assert_eq "anchor/control-without-anchor-sample-rule-keeps-it" "Alpha Cluster" \
+  "$(jexpr "$box/out.txt" "d[0].preserved['0']")"
+
+# --- K4. --reconcile: move names to re-minted ids, demote the rest ---------
+write_reconcile_mirror() { # box [crlf]
+  local dir="$1/vault/graphify/demo"
+  mkdir -p "$dir"
+  # Alpha's members now sit at id 2, Beta's at id 1; id 3 is all new members;
+  # Delta's left id 7 (gone from graph.json) for id 4; id 9 is gone outright.
+  printf '{"nodes":[%s,%s,%s,%s],"links":[]}\n' \
+    "$(seq_nodes 3 b 1 src/beta.ts)" "$(seq_nodes 3 a 2 src/alpha.ts)" "$(seq_nodes 3 x 3 src/x.ts)" \
+    "$(seq_nodes 3 d 4 src/delta.ts)" >"$dir/graph.json"
+  {
+    printf '# Graph Report - graphify/demo/graph.json\n\n'
+    printf '## Community Hubs (Navigation)\n'
+    printf -- '- [[_COMMUNITY_Alpha|Alpha]]\n- [[_COMMUNITY_Beta|Beta]]\n- [[_COMMUNITY_Gamma|Gamma]]\n\n'
+    printf '## Communities\n'
+    printf '### Community 1 - "Alpha"\nNodes (3): a1, a2, a3\n\n'
+    printf '### Community 2 - "Beta"\nNodes (3): b1, b2, b3\n\n'
+    printf '### Community 3 - "Gamma"\nNodes (3): g1, g2, g3\n\n'
+    printf '### Community 7 - "Delta"\nNodes (3): d1, d2, d3\n\n'
+    printf '### Community 9 - "Old Orphan"\nNodes (2): o1, o2\n'
+  } >"$dir/demo-GRAPH_REPORT.md"
+  crlf_if "$dir/demo-GRAPH_REPORT.md" "${2:-}"
+}
+
+run_reconcile_suite() { # tag [crlf]
+  local tag="$1" box status
+  box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+  write_reconcile_mirror "$box" "${2:-}"
+  status="$(run_label "$box" --reconcile demo)"
+  assert_eq "reconcile-$tag/exit-0" "0" "$status" "stderr: [$(cat "$box/err.txt")]"
+  assert_grep "reconcile-$tag/alpha-follows-its-members-to-2" '### Community 2 - "Alpha"' "$box/$REPORT_REL" \
+    "report: [$(cat "$box/$REPORT_REL")]"
+  assert_grep "reconcile-$tag/beta-follows-its-members-to-1" '### Community 1 - "Beta"' "$box/$REPORT_REL"
+  # Cleared to a DERIVED name, not `Community 3`: a placeholder would lower the
+  # sync label guard's named-count floor (review finding).
+  assert_grep "reconcile-$tag/gamma-replaced-by-derived-name" '### Community 3 - "x"' "$box/$REPORT_REL"
+  assert_not_grep "reconcile-$tag/gamma-name-gone" 'Gamma' "$box/$REPORT_REL"
+  assert_grep "reconcile-$tag/demotion-is-reported" 'Gamma' "$box/err.txt"
+  assert_eq "reconcile-$tag/replacement-recorded-derived" "derived" \
+    "$(jexpr "$box/$SIDECAR_REL" "d.labels['3'].provenance")" "sidecar: [$(cat "$box/$SIDECAR_REL" 2>/dev/null)]"
+  assert_eq "reconcile-$tag/named-count-kept" "5" \
+    "$(node "$(to_native "$REPO_ROOT/brain/bin/label-guard.mjs")" --count "$(to_native "$box/$REPORT_REL")")"
+  # The moved name's orphan heading goes; an orphan whose name moved nowhere stays.
+  assert_grep "reconcile-$tag/delta-follows-its-members-to-4" '### Community 4 - "Delta"' "$box/$REPORT_REL"
+  assert_not_grep "reconcile-$tag/moved-orphan-heading-dropped" '### Community 7 - ' "$box/$REPORT_REL"
+  assert_grep "reconcile-$tag/unmoved-orphan-kept" '### Community 9 - "Old Orphan"' "$box/$REPORT_REL"
+  # Kept names get an anchor, so a sync-only mirror leaves the sample check.
+  assert_eq "reconcile-$tag/kept-names-anchored" "a1,a2,a3|b1,b2,b3|d1,d2,d3" \
+    "$(jexpr "$box/$SIDECAR_REL" "[d.anchors.alpha,d.anchors.beta,d.anchors.delta].map(String).join('|')")"
+  status="$(run_stubs "$box")"
+  cdir="$box/vault/graphify/demo/communities"
+  assert_grep "reconcile-$tag/alpha-stub-holds-alpha-members" '"a1"' "$cdir/_COMMUNITY_Alpha.md" \
+    "stub: [$(cat "$cdir/_COMMUNITY_Alpha.md" 2>/dev/null)]"
+  assert_grep "reconcile-$tag/beta-stub-holds-beta-members" '"b1"' "$cdir/_COMMUNITY_Beta.md"
+}
+
+run_reconcile_suite lf
+run_reconcile_suite crlf crlf
+
+# A report that already matches graph.json is left byte-identical.
+box="$(new_box)"
+cp "$box/$REPORT_REL" "$box/report.before"
+status="$(run_label "$box" --reconcile demo)"
+assert_eq "reconcile/current-report-exit-0" "0" "$status" "stderr: [$(cat "$box/err.txt")]"
+assert_files_identical "reconcile/current-report-untouched" "$box/report.before" "$box/$REPORT_REL"
+
+# Review round 2 cases.
+# A derived replacement must not inherit the cleared name's stub filename.
+box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+write_reconcile_mirror "$box"
+mkdir -p "$box/vault/graphify/demo/communities"
+write_prior_stub "$box" "_COMMUNITY_Gamma" "Gamma" x1 x2 x3
+status="$(run_label "$box" --reconcile demo)"
+status="$(run_stubs "$box")"
+cdir="$box/vault/graphify/demo/communities"
+if [[ -f "$cdir/_COMMUNITY_x.md" && ! -f "$cdir/_COMMUNITY_Gamma.md" ]]; then
+  pass "reconcile/derived-replacement-does-not-inherit-cleared-filename"
+else
+  fail "reconcile/derived-replacement-does-not-inherit-cleared-filename" \
+    "expected _COMMUNITY_x.md and no _COMMUNITY_Gamma.md" "dir: [$(ls "$cdir" 2>/dev/null | tr '\n' ' ')]"
+fi
+
+# An unreadable sidecar stops the reconcile before any write: its 'derived'
+# records would be lost, and derived replacements could not be recorded.
+box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+write_reconcile_mirror "$box"
+printf '{"labels": {"3": {"name"' >"$box/$SIDECAR_REL"
+cp "$box/$SIDECAR_REL" "$box/side.before"
+cp "$box/$REPORT_REL" "$box/report.before"
+status="$(run_label "$box" --reconcile demo)"
+assert_eq "reconcile/corrupt-sidecar-exit-3" "3" "$status" "stderr: [$(cat "$box/err.txt")]"
+assert_files_identical "reconcile/corrupt-sidecar-left-alone" "$box/side.before" "$box/$SIDECAR_REL"
+assert_files_identical "reconcile/corrupt-sidecar-report-not-written" "$box/report.before" "$box/$REPORT_REL"
+assert_grep "reconcile/corrupt-sidecar-says-so" 'unreadable' "$box/err.txt"
+
+# A move onto a live id whose own stale name went nowhere must not lower the
+# named-heading count (the sync label guard's floor): Delta leaves absent id 7
+# for id 4, displacing "Epsilon", whose members are gone.
+box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+dir="$box/vault/graphify/demo"
+mkdir -p "$dir"
+printf '{"nodes":[%s],"links":[]}\n' "$(seq_nodes 3 d 4 src/delta.ts)" >"$dir/graph.json"
+printf '# R\n\n## Communities\n### Community 4 - "Epsilon"\nNodes (3): e1, e2, e3\n\n### Community 7 - "Delta"\nNodes (3): d1, d2, d3\n' \
+  >"$dir/demo-GRAPH_REPORT.md"
+status="$(run_label "$box" --reconcile demo)"
+assert_grep "reconcile/floor-delta-moved-to-4" '### Community 4 - "Delta"' "$dir/demo-GRAPH_REPORT.md" \
+  "report: [$(cat "$dir/demo-GRAPH_REPORT.md")]"
+assert_eq "reconcile/floor-named-count-not-lowered" "2" \
+  "$(node "$(to_native "$REPO_ROOT/brain/bin/label-guard.mjs")" --count "$(to_native "$dir/demo-GRAPH_REPORT.md")")"
+
+# A kept heading with no member line is not anchored to its id's current members,
+# and a name like HTTP/2.0 is not mistaken for a path.
+box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+dir="$box/vault/graphify/demo"
+mkdir -p "$dir"
+printf '{"nodes":[%s,%s],"links":[]}\n' "$(seq_nodes 2 u 1 src/u.ts)" "$(seq_nodes 2 h 2 src/h2.ts)" >"$dir/graph.json"
+printf '# Graph Report\n\n## Communities\n### Community 1 - "Unchecked"\n\n### Community 2 - "HTTP/2.0"\nNodes (2): h1, h2\n' \
+  >"$dir/demo-GRAPH_REPORT.md"
+status="$(run_label "$box" --reconcile demo)"
+assert_eq "reconcile/unchecked-heading-not-anchored|http2-anchored" "false|true" \
+  "$(jexpr "$box/$SIDECAR_REL" "('unchecked' in (d.anchors||{}))+'|'+('http/2.0' in (d.anchors||{}))")" \
+  "sidecar: [$(cat "$box/$SIDECAR_REL" 2>/dev/null)]"
+assert_grep "reconcile/http2-name-kept" '### Community 2 - "HTTP/2.0"' "$dir/demo-GRAPH_REPORT.md"
+
+# A placeholder must not inherit a named prior stub's filename: a prior stub
+# `_COMMUNITY_Gamma` whose members overlap the cluster now called `Community 3`
+# would keep resolving [[_COMMUNITY_Gamma]] to a cluster without that name.
+box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+dir="$box/vault/graphify/demo"
+mkdir -p "$dir/communities"
+printf '{"nodes":[%s],"links":[]}\n' "$(seq_nodes 3 x 3 src/x.ts)" >"$dir/graph.json"
+printf '# Graph Report\n\n## Communities\n### Community 3 - "Community 3"\nNodes (3): x1, x2, x3\n' >"$dir/demo-GRAPH_REPORT.md"
+write_prior_stub "$box" "_COMMUNITY_Gamma" "Gamma" x1 x2 x3
+status="$(run_stubs "$box")"
+cdir="$box/vault/graphify/demo/communities"
+if [[ -f "$cdir/_COMMUNITY_Community 3.md" && ! -f "$cdir/_COMMUNITY_Gamma.md" ]]; then
+  pass "reconcile/placeholder-does-not-inherit-named-filename"
+else
+  fail "reconcile/placeholder-does-not-inherit-named-filename" \
+    "expected _COMMUNITY_Community 3.md and no _COMMUNITY_Gamma.md" \
+    "dir: [$(ls "$cdir" 2>/dev/null | tr '\n' ' ')]"
+fi
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"

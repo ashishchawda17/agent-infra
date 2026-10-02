@@ -562,12 +562,18 @@ for repo in "${repos[@]}"; do
   # failure REFUSES the report copy, exactly as an explicit refusal does, and only
   # the report — graph.json and manifest.json still mirror, and the vault keeps
   # the report it already had.
+  report_copied=0
   if [[ -f "$src/GRAPH_REPORT.md" ]]; then
     guard_verdict=""; existing_named=""; incoming_named=""
     read -r guard_verdict existing_named incoming_named \
       <<<"$(label_guard_verdict "$dst/$name-GRAPH_REPORT.md" "$src/GRAPH_REPORT.md")" || true
     if [[ "$guard_verdict" == "allow" ]]; then
       cp "$src/GRAPH_REPORT.md" "$dst/$name-GRAPH_REPORT.md"
+      report_copied=1
+      # The labels sidecar (provenance + name anchors, INNOV-346) described the
+      # report just replaced; left behind, its anchors would re-judge the new
+      # report's names against the old members on the next kept-report sync.
+      rm -f "$dst/.community-labels.json"
       freeze_clear "$name"
     elif [[ "$guard_verdict" == "refuse" ]]; then
       # SPO-366: A REFUSAL IS NOT AUTOMATICALLY A DEFECT. Split on STALENESS.
@@ -663,6 +669,16 @@ for repo in "${repos[@]}"; do
     cp "$src/brain-inputs.json" "$dst/brain-inputs.json"
   elif [[ -f "$dst/brain-inputs.json" ]]; then
     rm -f "$dst/brain-inputs.json"
+  fi
+
+  # INNOV-346: a KEPT report names communities by the ids of the clustering it
+  # was written for, and graph.json was just replaced. Regenerating stubs from it
+  # as-is bound each old name to whatever cluster now holds its id (brain-plugin,
+  # 2026-09-28: "Eval Scoring" over session.sh's functions). Move names with
+  # their members and replace the rest with derived names first. A copied report was
+  # written for this graph.json and needs none of it.
+  if [[ $report_copied -eq 0 && -f "$dst/$name-GRAPH_REPORT.md" ]]; then
+    BRAIN_ROOT="$VAULT" node "$SCRIPT_DIR/label-communities.mjs" --reconcile "$name"       || echo "warn: community names not reconciled for $name — its stubs may carry names of clusters they no longer hold; run /brain:label $name" >&2
   fi
 
   # Regenerate Obsidian community stubs so [[_COMMUNITY_*]] links resolve.
