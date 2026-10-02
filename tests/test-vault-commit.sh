@@ -181,6 +181,7 @@ staged_count() { staged_list | grep -c . || true; }
 
 STATUS=""
 GH_PATH=""
+GIT_WRAP=""   # a dir holding a `git` wrapper, prepended to PATH for one case
 # Runs the guard, capturing streams into $BOX/out.txt / $BOX/err.txt and the exit
 # code into $STATUS. $GH_PATH (if set) is prepended to PATH for the gh stub.
 run_guard() { # [args...]
@@ -188,6 +189,7 @@ run_guard() { # [args...]
     cd "$VAULT" 2>/dev/null || cd "$BOX" || exit 127
     unset CLAUDE_PROJECT_DIR
     [[ -n "$GH_PATH" ]] && export PATH="$GH_PATH:$PATH"
+    [[ -n "$GIT_WRAP" ]] && export PATH="$GIT_WRAP:$PATH"
     BRAIN_ROOT="$VAULT" bash "$GUARD" "$@"
   ) >"$BOX/out.txt" 2>"$BOX/err.txt"
   STATUS=$?
@@ -537,10 +539,99 @@ make_dirty
 run_guard -m "midway failure"
 assert_eq "midway/pre-staged-refused" "1" "$STATUS" "$(evidence)"
 assert_eq "midway/pre-staged-survives-alone" "logs/2026-10-02-other.md" "$(staged_list | tr -d '\r')" "$(evidence)"
-# logs/ was re-added, so its staged blob may now be this run's. That cannot be
-# undone, so the refusal must name it rather than claim nothing of ours is left.
-assert_contains "midway/re-added-pre-staged-path-named" "re-added by it" "$(out_all)" "$(evidence)"
-assert_contains "midway/re-added-pre-staged-path-listed" "logs/2026-10-02-other.md" "$(out_all)" "$(evidence)"
+assert_contains "midway/says-shared-index-untouched" "shared index was not touched" "$(out_all)" "$(evidence)"
+
+# --- 21d2. ...and keeps that path's staged BLOB, not just its name (INNOV-375) --
+# Staging used to happen in the shared index, so re-adding wiki/log.md replaced
+# the other session's staged blob A with this run's B and a refusal could not
+# put A back. Compare blob SHAs: a path-list assert passes either way.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+printf 'graphify-out/\n' >"$VAULT/.gitignore"
+mkdir -p "$VAULT/graphify-out"
+echo "{}" >"$VAULT/graphify-out/graph.json"
+echo "content A" >"$VAULT/wiki/log.md"
+git -C "$VAULT" add wiki/log.md >/dev/null 2>&1                 # "another session"
+blob_a="$(git -C "$VAULT" hash-object wiki/log.md)"
+echo "content B" >"$VAULT/wiki/log.md"
+run_guard -m "late refusal"
+assert_eq "blob/late-refusal-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "blob/pre-staged-blob-kept" "$blob_a" \
+  "$(git -C "$VAULT" ls-files -s wiki/log.md | awk '{print $2}')" "$(evidence)"
+assert_eq "blob/no-private-index-left" "0" \
+  "$(ls "$VAULT/.git" | grep -c '^vault-commit-index' || true)" "$(evidence)"
+
+# A `git` wrapper on PATH that runs $WRAP_ACTION against the SHARED index once,
+# just before the guard's commit step (`commit-tree` now, `commit` before
+# INNOV-375, so the case fails against the old script), then runs the real git.
+REAL_GIT="$(command -v git)"
+make_git_wrap() { # action-script
+  GIT_WRAP="$BOX/wrap"
+  mkdir -p "$GIT_WRAP"
+  cat >"$GIT_WRAP/git" <<SH
+#!/usr/bin/env bash
+for a in "\$@"; do
+  case "\$a" in
+    commit|commit-tree)
+      if [[ ! -f "$BOX/wrap/fired" ]]; then
+        : >"$BOX/wrap/fired"
+        ( unset GIT_INDEX_FILE; cd "$VAULT" && $1 ) >/dev/null 2>&1
+      fi
+      break ;;
+  esac
+done
+exec "$REAL_GIT" "\$@"
+SH
+  chmod +x "$GIT_WRAP/git"
+}
+
+# --- 21d3. a path staged after verification is NOT committed (INNOV-375 gap 1) --
+# `git commit` committed whatever the shared index held at that moment, checked
+# or not. The commit is now the verified tree, so the late chats/ path stays out.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+mkdir -p "$VAULT/chats"
+echo "private transcript" >"$VAULT/chats/late.md"
+make_dirty
+make_git_wrap "'$REAL_GIT' add -f chats/late.md"
+run_guard -m "save"
+GIT_WRAP=""
+assert_eq "race/late-stage-wrapper-fired" "yes" "$([[ -f "$BOX/wrap/fired" ]] && echo yes)" "$(evidence)"
+assert_eq "race/late-stage-commits" "0" "$STATUS" "$(evidence)"
+assert_eq "race/late-stage-not-in-commit" "0" \
+  "$(git -C "$VAULT" ls-tree -r --name-only HEAD | grep -c '^chats/' || true)" "$(evidence)"
+assert_contains "race/late-stage-committed-ours" "wiki/log.md" \
+  "$(git -C "$VAULT" show --name-only --format= HEAD | tr '\n' ' ')" "$(evidence)"
+assert_eq "race/late-stage-left-staged-for-its-owner" "chats/late.md" "$(staged_list | tr -d '\r')" "$(evidence)"
+
+# --- 21d4. HEAD moved before the ref update => refused, nothing lost (CAS) ---
+# Another session commits onto the branch after the guards ran. The update-ref
+# compare-and-swap refuses; the intruder stays HEAD, the shared index unchanged.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+make_dirty
+before="$(head_sha)"
+index_before="$(git -C "$VAULT" ls-files -s | tr '\n' '|')"
+make_git_wrap "'$REAL_GIT' update-ref refs/heads/brain/work \$('$REAL_GIT' commit-tree 'HEAD^{tree}' -p HEAD -m intruder)"
+run_guard -m "loses the race"
+GIT_WRAP=""
+assert_eq "cas/refused" "1" "$STATUS" "$(evidence)"
+assert_eq "cas/intruder-is-head" "intruder" "$(head_subject)" "$(evidence)"
+assert_eq "cas/intruder-parent-is-before" "$before" "$(git -C "$VAULT" rev-parse HEAD^ 2>/dev/null)" "$(evidence)"
+assert_eq "cas/shared-index-unchanged" "$index_before" "$(git -C "$VAULT" ls-files -s | tr '\n' '|')" "$(evidence)"
+assert_contains "cas/explains" "HEAD moved" "$(out_all)" "$(evidence)"
+
+# --- 21d5. a successful commit leaves the shared index in line with HEAD -----
+# The committed paths are reset to the new commit in the shared index; without
+# that, the index still holds the old blob and a later commit reverts it.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+make_dirty
+run_guard -m "save"
+assert_eq "sync/commits" "0" "$STATUS" "$(evidence)"
+assert_eq "sync/index-matches-head" "0" "$(staged_count)" "staged: [$(staged_list | tr '\n' ' ')]" "$(evidence)"
+assert_eq "sync/no-private-index-left" "0" \
+  "$(ls "$VAULT/.git" | grep -c '^vault-commit-index' || true)" "$(evidence)"
 
 # --- 21e. a staged RENAME out of a forbidden path is seen by its source -----
 # With rename detection, `diff --cached --name-only` prints only the destination,

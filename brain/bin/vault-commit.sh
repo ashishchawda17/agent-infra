@@ -123,22 +123,24 @@
 #   - named paths with no change REFUSE (exit 1), unlike the default mode's
 #     "nothing to commit" exit 0: the caller is about to open a PR for them.
 #
-# NOTHING IS STAGED ON A REFUSAL. Every guard runs BEFORE the first `git add`,
-# including the index check: a path the allowlist forbids (PR mode: any path) is
-# refused before staging (INNOV-369). A refusal AFTER staging — `git add` failing
-# midway, a path staged concurrently, `git commit` failing — unstages what this
-# run added (the index now, minus what it held before staging) and never unstages
-# a path staged before the run. The older sync-graph.sh behaviour — stage, then
-# refuse, and tell the user it was "left staged" — is wrong in a shared checkout:
-# it hands the next session's commit a payload it never chose.
-# Where that unstage cannot give the guarantee, the refusal says so:
-#   - the index is locked by another process: the unstage cannot take the lock
-#     either, so the refusal lists the paths it could not unstage.
-#   - a path staged before the run that this run re-added keeps this run's
-#     content; the other session's staged version cannot be restored. The
-#     refusal names each such path.
-#   - a path another session stages while this run is staging, under an entry
-#     this run already added, looks like this run's and is unstaged with it.
+# NOTHING IS STAGED ON A REFUSAL (INNOV-375). The shared index is never written
+# before the commit lands. The run copies it to a private index under the vault's
+# .git/, stages and verifies there, and commits the verified TREE OBJECT with
+# `git commit-tree`, so the commit is exactly the tree that was checked: a path
+# another session stages mid-run is not in it. The branch moves by compare-and-
+# swap (`git update-ref <ref> <new> <old>`), so a HEAD that moved since step 4
+# refuses atomically. Every refusal leaves the shared index as it was.
+# Only after the ref moves are the committed paths reset to the new commit in
+# the shared index; every other staged path is left alone. The limits:
+#   - the copy carries what was already staged under the allowlist, so the
+#     commit includes another session's pre-staged allowlisted paths, as
+#     `git commit` always did.
+#   - a committed path that another session re-stages between the copy and the
+#     sync is reset to the committed version.
+#   - if that sync cannot take the index lock, the commit stands and the output
+#     prints the command that brings the index back in line.
+# `commit-tree` runs no pre-commit / commit-msg / post-commit hooks; no vault
+# uses them. It does honour commit.gpgsign, as `git commit` does.
 set -uo pipefail
 
 VAULT="${BRAIN_ROOT:-${CLAUDE_PROJECT_DIR:-$PWD}}"
@@ -412,50 +414,39 @@ if [[ $FORCE_COMMIT -eq 0 ]]; then
   fi
 fi
 
-# Every path in the index, NUL-separated so a non-ASCII name comes back verbatim
-# rather than octal-quoted. --no-renames: a staged rename lists its source too,
-# or a rename out of chats/ reads as its allowlisted destination alone.
+# The ref the commit moves, captured with CUR_SHA. Not `HEAD`: update-ref HEAD
+# follows whatever HEAD points at by then, so a `checkout -b` at the same SHA
+# would pass the compare-and-swap and take the commit.
+REF="$(git -C "$VAULT" symbolic-ref -q HEAD 2>/dev/null || echo HEAD)"
+[[ -n "$CUR_SHA" ]] || refuse "'${CUR_BRANCH:-HEAD}' has no commit yet" \
+  "  /brain:init commits the vault scaffold first; commit that by hand, then re-run."
+
+# --- 5. the private index ---------------------------------------------------
+# See "NOTHING IS STAGED ON A REFUSAL" in the header. Under .git/ so it is on the
+# same filesystem and never in the working tree; removed on every exit path.
+GIT_DIR_ABS="$(git -C "$VAULT" rev-parse --absolute-git-dir)" ||
+  refuse "could not resolve the vault's .git directory"
+PRIVATE_INDEX="$(mktemp "$GIT_DIR_ABS/vault-commit-index.XXXXXX")" ||
+  refuse "could not create a private index under '$GIT_DIR_ABS'"
+trap 'rm -f "$PRIVATE_INDEX" "$PRIVATE_INDEX.lock"' EXIT
+git_private() { GIT_INDEX_FILE="$PRIVATE_INDEX" git -C "$VAULT" "$@"; }
+if [[ -f "$GIT_DIR_ABS/index" ]]; then
+  cp "$GIT_DIR_ABS/index" "$PRIVATE_INDEX" || refuse "could not copy the shared index"
+else # a zero-byte file is a corrupt index, not an empty one
+  rm -f "$PRIVATE_INDEX"
+  git_private read-tree HEAD || refuse "could not read HEAD into a private index"
+fi
+
+# Every path staged in the private index, NUL-separated so a non-ASCII name comes
+# back verbatim rather than octal-quoted. --no-renames: a staged rename lists its
+# source too, or a rename out of chats/ reads as its allowlisted destination alone.
 # Fills the array named by $1, bash 3.2 style.
 read_index() { # array-name
   local _p
   eval "$1=()"
   while IFS= read -r -d '' _p; do
     eval "$1+=(\"\$_p\")"
-  done < <(git -C "$VAULT" diff --cached --name-only --no-renames -z 2>/dev/null)
-}
-
-# Unstages what THIS run added: the index now, minus what it held before step 5,
-# limited to paths under an entry step 5 has already `git add`ed (ADDED). A path
-# staged before the run is never unstaged, so another session's work stays, and
-# neither is one outside ADDED: this run cannot have staged it, so it was staged
-# concurrently. A pre-staged path under ADDED may now hold this run's content,
-# which cannot be undone, so it is named. Prints the lines for the refusal.
-ADDED=()
-unstage_this_run() {
-  local now=() ours=() kept=() p q mine
-  read_index now
-  for p in "${now[@]:-}"; do
-    [[ -z "$p" ]] && continue
-    mine=0
-    for q in "${ADDED[@]:-}"; do [[ -n "$q" ]] && path_is_allowed_by "$p" "$q" && { mine=1; break; }; done
-    [[ $mine -eq 1 ]] || continue
-    for q in "${PRE_STAGED[@]:-}"; do [[ "$p" == "$q" ]] && { mine=0; break; }; done
-    if [[ $mine -eq 1 ]]; then ours+=("$p"); else kept+=("$p"); fi
-  done
-  if [[ ${#kept[@]} -gt 0 ]]; then
-    echo "  Staged before this run and re-added by it, so they may hold this run's"
-    echo "  content (left staged; the earlier staged version cannot be restored):"
-    printf '    %s\n' "${kept[@]}"
-  fi
-  if [[ ${#ours[@]} -eq 0 ]]; then
-    echo "  No other path this run staged is left in the index."
-  elif printf '%s\0' "${ours[@]}" | git --literal-pathspecs -C "$VAULT" \
-         reset -q --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1; then
-    echo "  The ${#ours[@]} path(s) this run staged were unstaged again."
-  else
-    echo "  COULD NOT unstage the ${#ours[@]} path(s) this run staged (index locked?):"
-    printf '    %s\n' "${ours[@]}"
-  fi
+  done < <(git_private diff --cached --name-only --no-renames -z 2>/dev/null)
 }
 
 refuse_foreign() { # last line, then the paths
@@ -473,10 +464,9 @@ refuse_foreign() { # last line, then the paths
     "  or add the path to $SAVEINCLUDE if it belongs in vault commits."
 }
 
-# The shared index is checked BEFORE staging (INNOV-369). Refusing only after
-# `git add` would leave this command's paths staged next to someone else's.
-# PR mode: the index must be empty. Default mode: it may hold only allowlisted
-# paths, the same rule step 6 applies to the commit.
+# The copy is checked BEFORE staging (INNOV-369), so a refusal names what was
+# already staged rather than what this run added. PR mode: it must be empty.
+# Default mode: it may hold only allowlisted paths, the rule step 7 applies.
 PRE_STAGED=()
 read_index PRE_STAGED
 if [[ $PR_MODE -eq 1 && ${#PRE_STAGED[@]} -gt 0 ]]; then
@@ -493,7 +483,7 @@ if [[ ${#foreign[@]} -gt 0 ]]; then
   refuse_foreign "  This run staged nothing: the check runs before the first 'git add'." "${foreign[@]}"
 fi
 
-# --- 5. stage ---------------------------------------------------------------
+# --- 6. stage, into the private index ---------------------------------------
 # Entries that match nothing in the working tree are skipped rather than passed
 # to `git add` (which errors on a pathspec that matches no file). An allowlist
 # naming a path the vault does not have yet is normal — a fresh vault has no
@@ -513,30 +503,31 @@ entry_exists() { # vault-relative entry
   return 1
 }
 
+UNTOUCHED="  Nothing was committed, and the shared index was not touched."
 staged_any=0
 for entry in "${PATHS[@]}"; do
   # PR mode stages a named deletion too; git add refuses a path that never existed.
   [[ $PR_MODE -eq 1 ]] || entry_exists "$entry" || continue
   spec="$entry"; [[ $PR_MODE -eq 1 ]] && spec=":(literal)$entry"
-  if ! add_err="$(git -C "$VAULT" add -- "$spec" 2>&1)"; then
+  if ! add_err="$(git_private add -- "$spec" 2>&1)"; then
     refuse "'git add -- $entry' failed" \
       "$(printf '    %s\n' "$add_err")" \
-      "  Common causes: the index is locked by a concurrent session, or every file" \
-      "  under that path is gitignored. Nothing was committed." \
-      "$(unstage_this_run)"
+      "  Common cause: every file under that path is gitignored." \
+      "$UNTOUCHED"
   fi
-  ADDED+=("$entry")
   staged_any=1
 done
 
-# --- 6. VERIFY THE INDEX ----------------------------------------------------
-# The index is global to the checkout. Whatever step 5 added, something else may
-# already have staged something the allowlist forbids — another session, an
-# aborted merge, a human's `git add -A`. Step 5's discipline only governs step 5;
-# this check governs the commit. It is the one that makes the guarantee real.
-# The same check ran before step 5, so a hit here was staged during it.
+# --- 7. VERIFY THE TREE -----------------------------------------------------
+# The tree object is what step 8 commits, byte for byte, so this checks the
+# commit itself rather than an index another process can still change.
+if ! TREE="$(git_private write-tree 2>&1)"; then
+  refuse "git write-tree failed" "$(printf '    %s\n' "$TREE")" "$UNTOUCHED"
+fi
 STAGED=()
-read_index STAGED
+while IFS= read -r -d '' p; do
+  STAGED+=("$p")
+done < <(git -C "$VAULT" diff-tree -r -z --name-only --no-renames "$CUR_SHA" "$TREE" 2>/dev/null)
 
 if [[ ${#STAGED[@]} -eq 0 ]]; then
   # PR mode: the caller named edits it expects to ship. Exit 0 here would let it
@@ -552,21 +543,43 @@ fi
 
 violations=()
 for path in "${STAGED[@]}"; do
-  [[ -z "$path" ]] && continue
   path_is_allowed "$path" || violations+=("$path")
 done
-
-# The up-front check makes this a race: something was staged during step 5.
+# The copy was checked before staging, so a hit here came in through staging.
 if [[ ${#violations[@]} -gt 0 ]]; then
-  refuse_foreign "$(unstage_this_run)" "${violations[@]}"
+  refuse_foreign "$UNTOUCHED" "${violations[@]}"
 fi
 
-# --- 7. commit --------------------------------------------------------------
-if ! commit_out="$(git -C "$VAULT" commit -m "$MESSAGE" 2>&1)"; then
-  refuse "git commit failed" "$(printf '    %s\n' "$commit_out")" "$(unstage_this_run)"
+# --- 8. commit, then move the branch by compare-and-swap --------------------
+# `git commit -m` cleans whitespace; commit-tree takes the message verbatim.
+MESSAGE="$(printf '%s\n' "$MESSAGE" | git stripspace)"
+[[ -n "$MESSAGE" ]] || refuse "the commit message is only whitespace"
+if ! NEW="$(git -C "$VAULT" commit-tree "$TREE" -p "$CUR_SHA" -m "$MESSAGE" 2>&1)"; then
+  refuse "git commit-tree failed" "$(printf '    %s\n' "$NEW")" "$UNTOUCHED"
+fi
+if ! cas_err="$(git -C "$VAULT" update-ref -m "commit: ${MESSAGE%%$'\n'*}" "$REF" "$NEW" "$CUR_SHA" 2>&1)"; then
+  refuse "the vault's HEAD moved while this command was running" \
+    "  ref: $REF" \
+    "  sha then: $CUR_SHA   sha now: $(git -C "$VAULT" rev-parse -q --verify "$REF" 2>/dev/null || echo '?')" \
+    "$(printf '    %s\n' "$cas_err")" \
+    "  Another session committed to or reset the branch underneath this run." \
+    "$UNTOUCHED" \
+    "  Re-check the branch, then re-run the command."
 fi
 
 echo "VAULT-COMMIT: OK - committed ${#STAGED[@]} path(s) on '$CUR_BRANCH'"
 printf '  %s\n' "${STAGED[@]}"
+
+# --- 9. bring the shared index in line, for the committed paths only --------
+# Until this runs, the shared index holds the pre-commit blobs for them, and a
+# later subset commit would carry those back as a revert.
+if [[ "$(git -C "$VAULT" symbolic-ref -q HEAD 2>/dev/null || echo HEAD)" != "$REF" ]]; then
+  echo "  NOTE: the checkout left '$REF' during the commit; its index was not changed."
+elif ! printf '%s\0' "${STAGED[@]}" | git --literal-pathspecs -C "$VAULT" \
+       reset -q "$NEW" --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1; then
+  echo "  WARNING: the shared index is locked and still holds the pre-commit versions"
+  echo "  of the paths above, so a later commit would revert them. Run now:"
+  echo "    git -C \"$VAULT\" reset -q HEAD -- <the paths above>"
+fi
 echo "  Push when ready: git -C \"$VAULT\" push"
 exit 0
