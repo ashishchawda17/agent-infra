@@ -87,7 +87,9 @@ const loadFindings = (vault) => (existsSync(join(vault, FINDINGS)) ? readJson(jo
 
 function validate(v) {
   const bad = [];
-  if (!v || typeof v.note !== 'string' || !v.note) bad.push('note');
+  // A verdict comes from a subagent: keep its note a plain vault note path, or
+  // blobOf would hash whatever `../` points at.
+  if (!v || typeof v.note !== 'string' || !/^wiki\/[^\\]+\.md$/.test(v.note) || v.note.split('/').includes('..')) bad.push('note');
   if (!VERDICTS[v?.kind]) return [...bad, `kind ${JSON.stringify(v?.kind)}`];
   if (v.kind === 'dead-link' && !v.target) bad.push('target');
   if (!VERDICTS[v.kind].includes(v.verdict)) bad.push(`verdict ${JSON.stringify(v.verdict)} for ${v.kind}`);

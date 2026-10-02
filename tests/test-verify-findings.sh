@@ -76,6 +76,13 @@ printf '%s\n' '{"note":"wiki/a.md","kind":"claim","verdict":"cannot-tell","subty
 record; rc=$?
 check "record/refuses-drift-without-pairs" "$([[ $rc -ne 0 && ! -e "$FIND" ]]; echo $?)" "rc=$rc out: [$(cat "$TMPROOT/r.txt")]"
 
+printf '%s
+' '{"note":"wiki/../../outside.md","kind":"dead-link","target":"x","verdict":"none","reason":"escape"}' >"$TMPROOT/v.jsonl"
+printf 'x
+' >"$TMPROOT/outside.md"
+record; rc=$?
+check "record/refuses-path-escape" "$([[ $rc -ne 0 && ! -e "$FIND" ]]; echo $?)" "rc=$rc out: [$(cat "$TMPROOT/r.txt")]"
+
 # --- 3. record one per judged item --------------------------------------------
 cat >"$TMPROOT/v.jsonl" <<'EOF'
 {"note":"wiki/a.md","kind":"claim","verdict":"cannot-tell","subtype":"line-drift","drift":[{"old":"src/x.ts:10","new":"src/x.ts:14"}],"reason":"LINE DRIFT: moved","evidence":{"refs":["repo/src/x.ts:14"],"branch":"main","sha":"abc1234"}}
