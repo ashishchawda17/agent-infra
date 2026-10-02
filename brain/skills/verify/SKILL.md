@@ -133,7 +133,7 @@ Then **record this run's verdicts**, one per judged item: every subagent verdict
 node "${CLAUDE_PLUGIN_ROOT}/bin/verify-findings.mjs" record "$F" <verdicts.jsonl> --pr <n>   # omit --pr when no PR was opened
 ```
 
-It refuses the whole batch (nothing written) on a bad verdict, kind or subtype, a `cannot-tell` without a subtype, or `line-drift` without `drift` pairs; fix the line and re-run. It stamps each record with the note's blob, today's date and the PR, and drops earlier records whose item has left the queue. `logs/verify-findings.json` stays uncommitted on this branch: it is on `.saveinclude` (`logs/`), so the next `/brain:save` commits it. Never add it to `--pr-paths`. On an early exit after step 5's edits (a refused commit), still record, without `--pr`.
+It refuses the whole batch (nothing written) on a bad verdict, kind or subtype, a `cannot-tell` without a subtype, or `line-drift` without `drift` pairs; fix the line and re-run. It stamps each record with the note's blob, today's date and the PR, and drops earlier records whose item has left the queue. `logs/verify-findings.json` stays uncommitted on this branch: it is on `.saveinclude` (`logs/`), so the next `/brain:save` commits it. Never add it to `--pr-paths`. On an early exit after step 5's edits (a refused commit), still record, without `--pr`. A plan the user declined at step 5 is not recorded: nothing was applied, and a stored `holds` would carry a still-stale note forever.
 
 ### 7. Close the session record
 
