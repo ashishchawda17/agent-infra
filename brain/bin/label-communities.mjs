@@ -277,7 +277,14 @@ function fit(m, id, label, nodes) {
   return shared / (was + now.size - shared);
 }
 
-const isPathName = (label) => /[\\/]/.test(label ?? '') && /\.[A-Za-z0-9]{1,6}$/.test(label);
+// An extension starts with a letter, so "HTTP/2.0" is a name, not a path.
+const isPathName = (label) => /[\\/]/.test(label ?? '') && /\.[A-Za-z][A-Za-z0-9]{0,5}$/.test(label);
+
+// May a kept name with no anchor be anchored to its live id's members? Only if
+// its heading stated members: a heading without a member line is kept because
+// nothing could be checked, and anchoring it would bind it to whatever cluster
+// holds that id now. A remapped name's heading is its old id's.
+const seedable = (m, id, remapped) => (m.reportMembers.get(remapped?.[id]?.from ?? id)?.length ?? 0) > 0;
 const normPath = (p) => String(p ?? '').replace(/\\/g, '/').toLowerCase();
 const endsWithPath = (file, label) => normPath(file).endsWith(normPath(label));
 
@@ -754,14 +761,16 @@ if (argv.includes('--apply')) {
   // reads its own filler as a name worth preserving.
   // Anchors: a newly agent-named label is anchored to its members NOW; a kept
   // one carries its existing anchor (seeded from today's members when it has
-  // none yet). Never refreshed — see ANCHORS above. Derived filler is re-derived
-  // each run, so it gets none.
+  // none yet, and only if its heading stated members — see seedable). Never
+  // refreshed — see ANCHORS above. Derived filler is re-derived each run, so it
+  // gets none.
   const provOut = { version: 2, repo, updated: date, labels: {}, anchors: {} };
   for (const id of bySize) {
     provOut.labels[id] = { name: finalLabels[id], provenance: origin[id] };
     if (origin[id] === 'derived') continue;
     const k = nameKey(finalLabels[id]);
     const prev = origin[id] === 'preserved' ? m.anchors.get(k) : undefined;
+    if (!prev && origin[id] === 'preserved' && !seedable(m, id, remapped)) continue;
     provOut.anchors[k] = [...(prev ?? new Set(m.members.get(id).map(nodeKey)))].sort();
   }
   writeFileSync(join(m.dir, PROV_FILE), JSON.stringify(provOut, null, 2) + '\n', 'utf8');
@@ -806,19 +815,28 @@ if (argv.includes('--reconcile')) {
   // Sidecar: record the derived replacements, and seed an anchor for every kept
   // name that has none — without one, a mirror that only ever syncs would stay
   // on the sample check, which a moved heading's refreshed sample defeats.
+  // A sidecar that exists but will not parse is LEFT ALONE: rewriting it would
+  // drop its 'derived' records, and filler would then be kept as human work.
   const p = join(m.dir, PROV_FILE);
-  let side;
-  try { side = JSON.parse(readFileSync(p, 'utf8')); } catch { side = null; }
-  if (side === null || typeof side !== 'object' || Array.isArray(side)) side = { repo, labels: {} };
-  side.labels = side.labels && typeof side.labels === 'object' ? side.labels : {};
-  side.anchors = side.anchors && typeof side.anchors === 'object' ? side.anchors : {};
+  let side = { repo, labels: {} };
+  let sideOk = true;
+  if (existsSync(p)) {
+    try { side = JSON.parse(readFileSync(p, 'utf8')); } catch { sideOk = false; }
+    if (sideOk && (side === null || typeof side !== 'object' || Array.isArray(side))) sideOk = false;
+  }
   let sideChanged = false;
-  for (const d of demoted) { side.labels[d.id] = { name: d.to, provenance: 'derived' }; sideChanged = true; }
-  for (const [id, label] of Object.entries(preserved)) {
-    const k = nameKey(label);
-    if (m.anchors.has(k) || side.anchors[k]) continue;
-    side.anchors[k] = [...new Set(m.members.get(Number(id)).map(nodeKey))].sort();
-    sideChanged = true;
+  if (sideOk) {
+    side.labels = side.labels && typeof side.labels === 'object' ? side.labels : {};
+    side.anchors = side.anchors && typeof side.anchors === 'object' ? side.anchors : {};
+    for (const d of demoted) { side.labels[d.id] = { name: d.to, provenance: 'derived' }; sideChanged = true; }
+    for (const [id, label] of Object.entries(preserved)) {
+      const k = nameKey(label);
+      if (m.anchors.has(k) || side.anchors[k] || !seedable(m, Number(id), remapped)) continue;
+      side.anchors[k] = [...new Set(m.members.get(Number(id)).map(nodeKey))].sort();
+      sideChanged = true;
+    }
+  } else {
+    console.error(`warn reconcile ${repo}: ${PROV_FILE} is unreadable — left as is; derived replacements are not recorded and no anchors were added`);
   }
   if (text !== m.report) writeFileSync(m.reportPath, text, 'utf8');
   if (sideChanged) { side.version = 2; writeFileSync(p, JSON.stringify(side, null, 2) + '\n', 'utf8'); }

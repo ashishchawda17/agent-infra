@@ -1420,6 +1420,19 @@ run_346() { # tag [crlf]
 run_346 lf
 run_346 crlf crlf
 
+# A COPIED report retires the labels sidecar: its anchors described the old one.
+box="$(new_sandbox)"
+make_report "$box/$DST_REL" 0 3
+make_report "$box/$SRC_REL" 3 0 "Rebuild Label"
+printf '{"version":2,"labels":{},"anchors":{"rebuild label 1":["old"]}}\n' \
+  >"$box/vault/graphify/demorepo/.community-labels.json"
+run_sync "$box" "$STUBS_346:$PATH" >/dev/null
+if [[ -f "$box/vault/graphify/demorepo/.community-labels.json" ]]; then
+  fail "innov346/copied-report-retires-sidecar" "sidecar survived a report copy" "stderr: [$(cat "$box/err.txt")]"
+else
+  pass "innov346/copied-report-retires-sidecar"
+fi
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"

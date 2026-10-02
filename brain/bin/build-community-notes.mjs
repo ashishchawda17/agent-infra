@@ -192,13 +192,22 @@ for (const name of names) {
     return ids.length ? `${bare} (c${ids.join('-')})` : `${bare} (link-only ${peers.indexOf(rawName) + 1})`;
   };
 
+  // Names label-communities.mjs derived (recorded 'derived' in its sidecar).
+  const derived = new Set();
+  try {
+    const side = JSON.parse(readFileSync(join(dir, '.community-labels.json'), 'utf8'));
+    for (const v of Object.values(side?.labels ?? {})) if (v?.provenance === 'derived') derived.add(nameKey(v.name));
+  } catch {
+    /* no sidecar: nothing is known to be derived */
+  }
   const candidates = [];
   for (const [rawName, set] of memberSets)
     for (const [base, p] of prior) {
-      // A placeholder never inherits a prior filename: `Community 3` landing in
-      // `_COMMUNITY_Gamma.md` keeps [[_COMMUNITY_Gamma]] resolving to a cluster
-      // that name was cleared from (INNOV-346).
-      if (!isNamedLabel(rawName)) continue;
+      // A placeholder or a derived name never inherits a prior filename: those
+      // are what a cleared name is replaced with, and `x` landing in
+      // `_COMMUNITY_Gamma.md` keeps [[_COMMUNITY_Gamma]] resolving to the
+      // cluster that name was just cleared from (INNOV-346).
+      if (!isNamedLabel(rawName) || derived.has(nameKey(rawName))) continue;
       const score = jaccard(set, p.members);
       if (score >= 0.5) candidates.push({ rawName, base, score, priorLabel: p.label });
     }

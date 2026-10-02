@@ -570,6 +570,10 @@ for repo in "${repos[@]}"; do
     if [[ "$guard_verdict" == "allow" ]]; then
       cp "$src/GRAPH_REPORT.md" "$dst/$name-GRAPH_REPORT.md"
       report_copied=1
+      # The labels sidecar (provenance + name anchors, INNOV-346) described the
+      # report just replaced; left behind, its anchors would re-judge the new
+      # report's names against the old members on the next kept-report sync.
+      rm -f "$dst/.community-labels.json"
       freeze_clear "$name"
     elif [[ "$guard_verdict" == "refuse" ]]; then
       # SPO-366: A REFUSAL IS NOT AUTOMATICALLY A DEFECT. Split on STALENESS.

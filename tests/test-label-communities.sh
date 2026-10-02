@@ -1186,6 +1186,46 @@ status="$(run_label "$box" --reconcile demo)"
 assert_eq "reconcile/current-report-exit-0" "0" "$status" "stderr: [$(cat "$box/err.txt")]"
 assert_files_identical "reconcile/current-report-untouched" "$box/report.before" "$box/$REPORT_REL"
 
+# Review round 2 cases.
+# A derived replacement must not inherit the cleared name's stub filename.
+box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+write_reconcile_mirror "$box"
+mkdir -p "$box/vault/graphify/demo/communities"
+write_prior_stub "$box" "_COMMUNITY_Gamma" "Gamma" x1 x2 x3
+status="$(run_label "$box" --reconcile demo)"
+status="$(run_stubs "$box")"
+cdir="$box/vault/graphify/demo/communities"
+if [[ -f "$cdir/_COMMUNITY_x.md" && ! -f "$cdir/_COMMUNITY_Gamma.md" ]]; then
+  pass "reconcile/derived-replacement-does-not-inherit-cleared-filename"
+else
+  fail "reconcile/derived-replacement-does-not-inherit-cleared-filename" \
+    "expected _COMMUNITY_x.md and no _COMMUNITY_Gamma.md" "dir: [$(ls "$cdir" 2>/dev/null | tr '\n' ' ')]"
+fi
+
+# An unreadable sidecar is left byte-identical (its 'derived' records would be lost).
+box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+write_reconcile_mirror "$box"
+printf '{"labels": {"3": {"name"' >"$box/$SIDECAR_REL"
+cp "$box/$SIDECAR_REL" "$box/side.before"
+status="$(run_label "$box" --reconcile demo)"
+assert_eq "reconcile/corrupt-sidecar-exit-0" "0" "$status" "stderr: [$(cat "$box/err.txt")]"
+assert_files_identical "reconcile/corrupt-sidecar-left-alone" "$box/side.before" "$box/$SIDECAR_REL"
+assert_grep "reconcile/corrupt-sidecar-warns" 'unreadable' "$box/err.txt"
+
+# A kept heading with no member line is not anchored to its id's current members,
+# and a name like HTTP/2.0 is not mistaken for a path.
+box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+dir="$box/vault/graphify/demo"
+mkdir -p "$dir"
+printf '{"nodes":[%s,%s],"links":[]}\n' "$(seq_nodes 2 u 1 src/u.ts)" "$(seq_nodes 2 h 2 src/h2.ts)" >"$dir/graph.json"
+printf '# Graph Report\n\n## Communities\n### Community 1 - "Unchecked"\n\n### Community 2 - "HTTP/2.0"\nNodes (2): h1, h2\n' \
+  >"$dir/demo-GRAPH_REPORT.md"
+status="$(run_label "$box" --reconcile demo)"
+assert_eq "reconcile/unchecked-heading-not-anchored|http2-anchored" "false|true" \
+  "$(jexpr "$box/$SIDECAR_REL" "('unchecked' in (d.anchors||{}))+'|'+('http/2.0' in (d.anchors||{}))")" \
+  "sidecar: [$(cat "$box/$SIDECAR_REL" 2>/dev/null)]"
+assert_grep "reconcile/http2-name-kept" '### Community 2 - "HTTP/2.0"' "$dir/demo-GRAPH_REPORT.md"
+
 # A placeholder must not inherit a named prior stub's filename: a prior stub
 # `_COMMUNITY_Gamma` whose members overlap the cluster now called `Community 3`
 # would keep resolving [[_COMMUNITY_Gamma]] to a cluster without that name.
