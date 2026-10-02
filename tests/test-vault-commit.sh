@@ -674,6 +674,33 @@ run_guard -m "must be signed"
 assert_eq "sign/refused" "1" "$STATUS" "$(evidence)"
 assert_eq "sign/head-unmoved" "$before" "$(head_sha)" "$(evidence)"
 
+# --- 21d4f. commit hooks still run: a pre-commit scanner can refuse ----------
+# commit-tree runs no hooks, so the guard runs them. The hook lives on a
+# relative core.hooksPath and must see the PRIVATE index: the shared one has
+# nothing staged, so a hook reading it would pass the secret.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+mkdir -p "$VAULT/.githooks"
+printf '#!/usr/bin/env bash\ngit diff --cached | grep -q SECRET && { echo "secret found"; exit 1; }\nexit 0\n' >"$VAULT/.githooks/pre-commit"
+chmod +x "$VAULT/.githooks/pre-commit"
+git -C "$VAULT" config core.hooksPath .githooks
+echo "SECRET=1" >>"$VAULT/wiki/log.md"
+before="$(head_sha)"
+run_guard -m "carries a secret"
+assert_eq "hooks/pre-commit-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "hooks/pre-commit-head-unmoved" "$before" "$(head_sha)" "$(evidence)"
+assert_contains "hooks/pre-commit-output-relayed" "secret found" "$(out_all)" "$(evidence)"
+
+# --- 21d4g. ...and a commit-msg hook can rewrite the message ----------------
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+printf '#!/usr/bin/env bash\necho "Hooked: yes" >>"$1"\n' >"$VAULT/.git/hooks/commit-msg"
+chmod +x "$VAULT/.git/hooks/commit-msg"
+make_dirty
+run_guard -m "save"
+assert_eq "hooks/commit-msg-commits" "0" "$STATUS" "$(evidence)"
+assert_contains "hooks/commit-msg-applied" "Hooked: yes" "$(git -C "$VAULT" log -1 --format=%B)" "$(evidence)"
+
 # --- 21d5. a successful commit leaves the shared index in line with HEAD -----
 # The committed paths are reset to the new commit in the shared index; without
 # that, the index still holds the old blob and a later commit reverts it.

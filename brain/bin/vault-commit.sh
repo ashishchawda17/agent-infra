@@ -144,9 +144,9 @@
 #     the committed version.
 #   - if the sync cannot take the index lock, the commit stands, and the output
 #     prints the runnable command that brings the shared index back in line.
-# `commit-tree` runs no pre-commit / commit-msg / post-commit hooks (no vault
-# was found using them), and signs only with -S, so commit.gpgsign is read and
-# passed on by hand.
+# `commit-tree` runs no hooks and signs only with -S, so step 8 runs the
+# pre-commit and commit-msg hooks itself (a secret scanner on core.hooksPath
+# must still see the commit) and passes commit.gpgsign on by hand.
 set -uo pipefail
 
 VAULT="${BRAIN_ROOT:-${CLAUDE_PROJECT_DIR:-$PWD}}"
@@ -434,7 +434,7 @@ GIT_DIR_ABS="$(git -C "$VAULT" rev-parse --absolute-git-dir)" ||
   refuse "could not resolve the vault's .git directory"
 PRIVATE_INDEX="$(mktemp "$GIT_DIR_ABS/vault-commit-index.XXXXXX")" ||
   refuse "could not create a private index under '$GIT_DIR_ABS'"
-trap 'rm -f "$PRIVATE_INDEX" "$PRIVATE_INDEX.lock"' EXIT
+trap 'rm -f "$PRIVATE_INDEX" "$PRIVATE_INDEX.lock" "$PRIVATE_INDEX.msg"' EXIT
 git_private() { GIT_INDEX_FILE="$PRIVATE_INDEX" git -C "$VAULT" "$@"; }
 UNTOUCHED="  Nothing was committed, and the shared index was not touched."
 if [[ -f "$GIT_DIR_ABS/index" ]]; then
@@ -563,7 +563,21 @@ fi
 
 # --- 8. commit, then move the branch by compare-and-swap --------------------
 # `git commit -m` cleans whitespace; commit-tree takes the message verbatim.
-MESSAGE="$(printf '%s\n' "$MESSAGE" | git stripspace)"
+# Hooks run as `git commit` runs them: from the vault root, against the index
+# being committed (here the private one). core.hooksPath is honoured through
+# --git-path. Called directly rather than via `git hook run` (git 2.36+).
+HOOKS_DIR="$(cd "$VAULT" && cd "$(git rev-parse --git-path hooks)" 2>/dev/null && pwd)"
+run_hook() { # name [args...]
+  local hook="$HOOKS_DIR/$1" out; shift
+  [[ -n "$HOOKS_DIR" && -x "$hook" ]] || return 0
+  if ! out="$(cd "$VAULT" && GIT_INDEX_FILE="$PRIVATE_INDEX" "$hook" "$@" 2>&1)"; then
+    refuse "the $(basename "$hook") hook rejected the commit" "$(printf '    %s\n' "$out")" "$UNTOUCHED"
+  fi
+}
+run_hook pre-commit
+printf '%s\n' "$MESSAGE" >"$PRIVATE_INDEX.msg"
+run_hook commit-msg "$PRIVATE_INDEX.msg"
+MESSAGE="$(git stripspace <"$PRIVATE_INDEX.msg")"
 [[ -n "$MESSAGE" ]] || refuse "the commit message is only whitespace"
 # commit-tree signs only when asked, so carry commit.gpgsign over by hand: a
 # vault that requires signed commits must refuse, as `git commit` does.
