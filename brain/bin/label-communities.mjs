@@ -94,7 +94,7 @@ import { foldLabel, nameKey } from './community-name.mjs';
 // INNOV-274: "what counts as a named label" is NOT defined here any more — it is
 // defined once in label-guard.mjs and shared with sync-graph.sh's copy-time
 // guard, which used to carry its own grep-shaped copy of the same idea.
-import { isNamedLabel, readReportLabels } from './label-guard.mjs';
+import { countNamedLabels, isNamedLabel, readReportLabels } from './label-guard.mjs';
 
 const argv = process.argv.slice(2);
 const argVal = (flag) => (argv.indexOf(flag) >= 0 ? argv[argv.indexOf(flag) + 1] : undefined);
@@ -810,36 +810,46 @@ if (argv.includes('--reconcile')) {
   }
   const keepLinkNames = new Set(Object.values(remapped).map((r) => nameKey(r.label)));
   const movedFrom = new Set(Object.values(remapped).map((r) => r.from));
-  const text = transformReport(m, finalLabels, preservedIds, keepLinkNames, { dropOrphans: movedFrom });
+  let text = transformReport(m, finalLabels, preservedIds, keepLinkNames, { dropOrphans: movedFrom });
+  // The sync label guard's floor is the report's named-heading count, and a
+  // move onto a live id whose own (stale) name went nowhere replaces one name
+  // with another. Dropping the moved name's orphan heading would then lower the
+  // floor, so keep the orphans in that case: a duplicate heading over an absent
+  // id adds no members to the stub.
+  if (countNamedLabels(text) < countNamedLabels(m.report))
+    text = transformReport(m, finalLabels, preservedIds, keepLinkNames, { dropOrphans: false });
 
   // Sidecar: record the derived replacements, and seed an anchor for every kept
   // name that has none — without one, a mirror that only ever syncs would stay
   // on the sample check, which a moved heading's refreshed sample defeats.
-  // A sidecar that exists but will not parse is LEFT ALONE: rewriting it would
-  // drop its 'derived' records, and filler would then be kept as human work.
+  // A sidecar that exists but will not parse stops the reconcile before ANY
+  // write: rewriting it would drop its 'derived' records (filler then reads as
+  // human work), and writing the report without it would leave this run's
+  // derived replacements unrecorded, i.e. preserved forever.
   const p = join(m.dir, PROV_FILE);
   let side = { repo, labels: {} };
-  let sideOk = true;
   if (existsSync(p)) {
-    try { side = JSON.parse(readFileSync(p, 'utf8')); } catch { sideOk = false; }
-    if (sideOk && (side === null || typeof side !== 'object' || Array.isArray(side))) sideOk = false;
-  }
-  let sideChanged = false;
-  if (sideOk) {
-    side.labels = side.labels && typeof side.labels === 'object' ? side.labels : {};
-    side.anchors = side.anchors && typeof side.anchors === 'object' ? side.anchors : {};
-    for (const d of demoted) { side.labels[d.id] = { name: d.to, provenance: 'derived' }; sideChanged = true; }
-    for (const [id, label] of Object.entries(preserved)) {
-      const k = nameKey(label);
-      if (m.anchors.has(k) || side.anchors[k] || !seedable(m, Number(id), remapped)) continue;
-      side.anchors[k] = [...new Set(m.members.get(Number(id)).map(nodeKey))].sort();
-      sideChanged = true;
+    try { side = JSON.parse(readFileSync(p, 'utf8')); } catch { side = null; }
+    if (side === null || typeof side !== 'object' || Array.isArray(side)) {
+      console.error(`error reconcile ${repo}: ${PROV_FILE} is unreadable — nothing was written. Fix or remove it, then re-run.`);
+      process.exit(3);
     }
-  } else {
-    console.error(`warn reconcile ${repo}: ${PROV_FILE} is unreadable — left as is; derived replacements are not recorded and no anchors were added`);
   }
-  if (text !== m.report) writeFileSync(m.reportPath, text, 'utf8');
+  side.labels = side.labels && typeof side.labels === 'object' ? side.labels : {};
+  side.anchors = side.anchors && typeof side.anchors === 'object' ? side.anchors : {};
+  let sideChanged = false;
+  for (const d of demoted) { side.labels[d.id] = { name: d.to, provenance: 'derived' }; sideChanged = true; }
+  for (const [id, label] of Object.entries(preserved)) {
+    const k = nameKey(label);
+    if (m.anchors.has(k) || side.anchors[k] || !seedable(m, Number(id), remapped)) continue;
+    side.anchors[k] = [...new Set(m.members.get(Number(id)).map(nodeKey))].sort();
+    sideChanged = true;
+  }
+  // Sidecar first: interrupted between the two writes, the report still holds
+  // the old name, which the next sync re-checks and re-derives. The other order
+  // would leave a derived name with no 'derived' record, i.e. preserved.
   if (sideChanged) { side.version = 2; writeFileSync(p, JSON.stringify(side, null, 2) + '\n', 'utf8'); }
+  if (text !== m.report) writeFileSync(m.reportPath, text, 'utf8');
   for (const [id, r] of Object.entries(remapped)) console.error(`reconcile ${repo}: "${r.label}" moved with its members, community ${r.from} -> ${id}`);
   if (demoted.length)
     console.error(

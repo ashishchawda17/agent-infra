@@ -1202,15 +1202,33 @@ else
     "expected _COMMUNITY_x.md and no _COMMUNITY_Gamma.md" "dir: [$(ls "$cdir" 2>/dev/null | tr '\n' ' ')]"
 fi
 
-# An unreadable sidecar is left byte-identical (its 'derived' records would be lost).
+# An unreadable sidecar stops the reconcile before any write: its 'derived'
+# records would be lost, and derived replacements could not be recorded.
 box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
 write_reconcile_mirror "$box"
 printf '{"labels": {"3": {"name"' >"$box/$SIDECAR_REL"
 cp "$box/$SIDECAR_REL" "$box/side.before"
+cp "$box/$REPORT_REL" "$box/report.before"
 status="$(run_label "$box" --reconcile demo)"
-assert_eq "reconcile/corrupt-sidecar-exit-0" "0" "$status" "stderr: [$(cat "$box/err.txt")]"
+assert_eq "reconcile/corrupt-sidecar-exit-3" "3" "$status" "stderr: [$(cat "$box/err.txt")]"
 assert_files_identical "reconcile/corrupt-sidecar-left-alone" "$box/side.before" "$box/$SIDECAR_REL"
-assert_grep "reconcile/corrupt-sidecar-warns" 'unreadable' "$box/err.txt"
+assert_files_identical "reconcile/corrupt-sidecar-report-not-written" "$box/report.before" "$box/$REPORT_REL"
+assert_grep "reconcile/corrupt-sidecar-says-so" 'unreadable' "$box/err.txt"
+
+# A move onto a live id whose own stale name went nowhere must not lower the
+# named-heading count (the sync label guard's floor): Delta leaves absent id 7
+# for id 4, displacing "Epsilon", whose members are gone.
+box="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+dir="$box/vault/graphify/demo"
+mkdir -p "$dir"
+printf '{"nodes":[%s],"links":[]}\n' "$(seq_nodes 3 d 4 src/delta.ts)" >"$dir/graph.json"
+printf '# R\n\n## Communities\n### Community 4 - "Epsilon"\nNodes (3): e1, e2, e3\n\n### Community 7 - "Delta"\nNodes (3): d1, d2, d3\n' \
+  >"$dir/demo-GRAPH_REPORT.md"
+status="$(run_label "$box" --reconcile demo)"
+assert_grep "reconcile/floor-delta-moved-to-4" '### Community 4 - "Delta"' "$dir/demo-GRAPH_REPORT.md" \
+  "report: [$(cat "$dir/demo-GRAPH_REPORT.md")]"
+assert_eq "reconcile/floor-named-count-not-lowered" "2" \
+  "$(node "$(to_native "$REPO_ROOT/brain/bin/label-guard.mjs")" --count "$(to_native "$dir/demo-GRAPH_REPORT.md")")"
 
 # A kept heading with no member line is not anchored to its id's current members,
 # and a name like HTTP/2.0 is not mistaken for a path.
