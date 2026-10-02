@@ -537,6 +537,10 @@ make_dirty
 run_guard -m "midway failure"
 assert_eq "midway/pre-staged-refused" "1" "$STATUS" "$(evidence)"
 assert_eq "midway/pre-staged-survives-alone" "logs/2026-10-02-other.md" "$(staged_list | tr -d '\r')" "$(evidence)"
+# logs/ was re-added, so its staged blob may now be this run's. That cannot be
+# undone, so the refusal must name it rather than claim nothing of ours is left.
+assert_contains "midway/re-added-pre-staged-path-named" "re-added by it" "$(out_all)" "$(evidence)"
+assert_contains "midway/re-added-pre-staged-path-listed" "logs/2026-10-02-other.md" "$(out_all)" "$(evidence)"
 
 # --- 21e. a staged RENAME out of a forbidden path is seen by its source -----
 # With rename detection, `diff --cached --name-only` prints only the destination,

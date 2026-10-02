@@ -127,7 +127,7 @@
 # including the index check: a path the allowlist forbids (PR mode: any path) is
 # refused before staging (INNOV-369). A refusal AFTER staging — `git add` failing
 # midway, a path staged concurrently, `git commit` failing — unstages what this
-# run added (the index now, minus what it held before staging) and never touches
+# run added (the index now, minus what it held before staging) and never unstages
 # a path staged before the run. The older sync-graph.sh behaviour — stage, then
 # refuse, and tell the user it was "left staged" — is wrong in a shared checkout:
 # it hands the next session's commit a payload it never chose.
@@ -135,7 +135,8 @@
 #   - the index is locked by another process: the unstage cannot take the lock
 #     either, so the refusal lists the paths it could not unstage.
 #   - a path staged before the run that this run re-added keeps this run's
-#     content; the other session's staged version cannot be restored.
+#     content; the other session's staged version cannot be restored. The
+#     refusal names each such path.
 #   - a path another session stages while this run is staging, under an entry
 #     this run already added, looks like this run's and is unstaged with it.
 set -uo pipefail
@@ -425,12 +426,13 @@ read_index() { # array-name
 
 # Unstages what THIS run added: the index now, minus what it held before step 5,
 # limited to paths under an entry step 5 has already `git add`ed (ADDED). A path
-# staged before the run is never touched, so another session's work stays, and
+# staged before the run is never unstaged, so another session's work stays, and
 # neither is one outside ADDED: this run cannot have staged it, so it was staged
-# concurrently. Prints one line for the refusal.
+# concurrently. A pre-staged path under ADDED may now hold this run's content,
+# which cannot be undone, so it is named. Prints the lines for the refusal.
 ADDED=()
 unstage_this_run() {
-  local now=() ours=() p q mine
+  local now=() ours=() kept=() p q mine
   read_index now
   for p in "${now[@]:-}"; do
     [[ -z "$p" ]] && continue
@@ -438,10 +440,15 @@ unstage_this_run() {
     for q in "${ADDED[@]:-}"; do [[ -n "$q" ]] && path_is_allowed_by "$p" "$q" && { mine=1; break; }; done
     [[ $mine -eq 1 ]] || continue
     for q in "${PRE_STAGED[@]:-}"; do [[ "$p" == "$q" ]] && { mine=0; break; }; done
-    [[ $mine -eq 1 ]] && ours+=("$p")
+    if [[ $mine -eq 1 ]]; then ours+=("$p"); else kept+=("$p"); fi
   done
+  if [[ ${#kept[@]} -gt 0 ]]; then
+    echo "  Staged before this run and re-added by it, so they may hold this run's"
+    echo "  content (left staged; the earlier staged version cannot be restored):"
+    printf '    %s\n' "${kept[@]}"
+  fi
   if [[ ${#ours[@]} -eq 0 ]]; then
-    echo "  Nothing this run staged is left in the index."
+    echo "  No other path this run staged is left in the index."
   elif printf '%s\0' "${ours[@]}" | git --literal-pathspecs -C "$VAULT" \
          reset -q --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1; then
     echo "  The ${#ours[@]} path(s) this run staged were unstaged again."
