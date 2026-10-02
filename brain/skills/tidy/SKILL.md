@@ -87,9 +87,9 @@ node "${CLAUDE_PLUGIN_ROOT}/bin/freshness.mjs" --json > "$F"                 # w
 node "${CLAUDE_PLUGIN_ROOT}/bin/tidy-decide.mjs" questions "$F" > "$Q"   # from the vault root, or with BRAIN_ROOT=<vault> set
 ```
 
-Each line of `$Q` is one question: `{id, group, header, question, options: [{label, description, apply}]}`, already 2–4 options with real candidates first (rename history, same-named files in other registered repos, paths the note names, `/brain:verify`'s saved evidence; similar or area-common tags; current stubs ranked by member overlap with the deleted one). Ask them with `AskUserQuestion`, **4 per call, one group at a time** (`tag-pair`, then `tag`, then `anchor`, then `link`), passing `header`, `question` and each option's `label`/`description` through unchanged. Do not invent options; "Other" is added for you.
+Each line of `$Q` is one question: `{id, group, header, question, options: [{label, description, apply}], other}`, already 2–4 options with real candidates first (rename history, same-named files in other registered repos, paths the note names, `/brain:verify`'s saved evidence; similar or area-common tags; current stubs ranked by member overlap with the deleted one). Ask them with `AskUserQuestion`, **4 per call, one group at a time** (`tag-pair`, then `tag`, then `anchor`, then `link`), passing `header`, `question` and each option's `label`/`description` through unchanged. Do not invent options; "Other" is added for you.
 
-For each answer, append the chosen option's `apply` objects to `$A`, one JSON object per line, verbatim. For an "Other" answer, write one object yourself with the question's `id`: `{"id", "kind": "anchor", "note", "from"?, "to": "<typed path>"}` (copy `from` from the question's other edits), `{"id", "kind": "tag", "note", "from", "to"}`, or `{"id", "kind": "link", "note", "from", "to"}`. A skipped question gets no line. Then:
+For each answer, append the chosen option's `apply` objects to `$A`, one JSON object per line, verbatim. For an "Other" answer, append the question's `other` object with `"to"` set to the typed path, tag or stub name; a `tag-pair` question has no `other`, so treat its free-text answer as unanswered. A skipped question gets no line. `apply` refuses any edit its question did not offer. Then:
 
 ```bash
 node "${CLAUDE_PLUGIN_ROOT}/bin/tidy-decide.mjs" apply "$Q" "$A"

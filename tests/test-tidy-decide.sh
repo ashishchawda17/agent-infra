@@ -87,12 +87,13 @@ note() { # note <rel> <crlf:0|1> <frontmatter lines (newline-joined)> <body>
 note wiki/alpha/renamed.md 1 $'id: renamed\nsource: alpha/src/old.sh\ntags: [shell, constraint]' 'Old script.'
 note wiki/alpha/cross.md 0 $'id: cross\nsource: alpha/scripts/helper.sh\ntags: [shell, ops]' 'Helper.'
 note wiki/misc/cross2.md 0 $'id: cross2\nsource: alpha/scripts/helper.sh\ntags: [ops, constraints]' 'Helper too.'
+note wiki/alpha/wrongrepo.md 0 $'id: wrongrepo\nsource: beta/docs/guide.md\ntags: [ops, shell]' 'Wrong repo.'
 note wiki/misc/tool.md 0 $'id: tool\nsource: misc/tool.sh\ntags: [ops, shell]' 'Tool.'
 note wiki/alpha/session.md 0 $'id: session\nsource: verified-in-session/2026-09-16\ntags: [shell, ops]' 'Seen live.'
 note wiki/alpha/nosrc.md 0 $'id: nosrc\ntags: [shell, bash-tricks]' 'Read `docs/guide.md` first.'
 note wiki/alpha/linker.md 0 $'id: linker\nsource: alpha/docs/guide.md\ntags: [shell, ops]' 'See [[_COMMUNITY_Old Name|the old cluster]] and [[_COMMUNITY_Old Name#Members]] and [[_COMMUNITY_Aliased Label]].'
 note wiki/_drafts/d.md 0 $'id: d\nsource: alpha/src/old.sh\ntags: [draftonly]' 'Draft [[_COMMUNITY_Old Name]].'
-printf -- '---\nid: index\n---\n[[renamed]] [[cross]] [[cross2]] [[session]] [[nosrc]] [[linker]] [[tool]]\n' >"$VAULT/wiki/index.md"
+printf -- '---\nid: index\n---\n[[renamed]] [[cross]] [[cross2]] [[session]] [[nosrc]] [[linker]] [[tool]] [[wrongrepo]]\n' >"$VAULT/wiki/index.md"
 
 stub() { # stub <file-base> <alias|-> <member...>
   local f="$VAULT/graphify/alpha/communities/$1.md" a="$2"; shift 2
@@ -144,6 +145,7 @@ check "anchor/rename-history" "$([[ "$(labels anchor:wiki/alpha/renamed.md)" == 
 check "anchor/cross-repo-basename" "$([[ "$(labels anchor:wiki/misc/cross2.md)" == *beta/tools/helper.sh* ]]; echo $?)" "got: [$(labels anchor:wiki/misc/cross2.md)]"
 check "anchor/wrong-repo-not-offered" "$([[ "$(labels anchor:wiki/alpha/cross.md)" != *beta/* && "$(labels anchor:wiki/alpha/cross.md)" != NOQUESTION ]]; echo $?)" "got: [$(labels anchor:wiki/alpha/cross.md)]"
 check "anchor/registered-name-not-folder" "$([[ "$(labels anchor:wiki/misc/tool.md)" == gamma/bin/tool.sh\|* && "$(labels anchor:wiki/misc/tool.md)" != *gamma-folder* ]]; echo $?)" "got: [$(labels anchor:wiki/misc/tool.md)]"
+check "anchor/wrong-repo-no-untracked" "$([[ "$(labels anchor:wiki/alpha/wrongrepo.md)" == 'alpha/docs/guide.md|Leave' ]]; echo $?)" "got: [$(labels anchor:wiki/alpha/wrongrepo.md)]"
 check "anchor/no-source-body-path" "$([[ "$(labels anchor:wiki/alpha/nosrc.md)" == *alpha/docs/guide.md* ]]; echo $?)" "got: [$(labels anchor:wiki/alpha/nosrc.md)]"
 check "anchor/unverifiable-has-untracked" "$([[ "$(labels anchor:wiki/alpha/session.md)" == *untracked* ]]; echo $?)" "got: [$(labels anchor:wiki/alpha/session.md)]"
 check "tag/pair" "$([[ "$(labels tag-pair:constraint+constraints)" == constraint\|constraints\|* ]]; echo $?)" "got: [$(labels tag-pair:constraint+constraints)] q: [$(qdump | grep tag)]"
@@ -159,14 +161,16 @@ check "questions/at-most-4-options" "$(node -e 'const l=require("fs").readFileSy
 pick anchor:wiki/alpha/renamed.md alpha/lib/new.sh
 pick tag-pair:constraint+constraints constraint
 pick 'link:wiki/alpha/linker.md:_COMMUNITY_Old Name' '_COMMUNITY_Split One'
-pick 'link:wiki/alpha/linker.md:_COMMUNITY_Aliased Label' '_COMMUNITY_Split Two'
 pick anchor:wiki/misc/cross2.md beta/tools/helper.sh
 # typed "Other" answers that the gate must reject: a nonexistent file, and the
 # wrong-repo file the questions step deliberately did not offer
 printf '%s\n' '{"id":"anchor:wiki/alpha/nosrc.md","kind":"anchor","note":"wiki/alpha/nosrc.md","to":"alpha/docs/nope.md"}' \
   '{"id":"anchor:wiki/alpha/cross.md","kind":"anchor","note":"wiki/alpha/cross.md","from":"alpha/scripts/helper.sh","to":"beta/tools/helper.sh"}' \
   '{"id":"anchor:wiki/misc/tool.md","kind":"anchor","note":"wiki/misc/tool.md","from":"misc/tool.sh","to":"gamma-folder/bin/tool.sh"}' \
-  '{"id":"x","kind":"tag","note":"wiki/../../escape.md","from":"a","to":"b"}' >>"$TMPROOT/a.jsonl"
+  '{"id":"x","kind":"tag","note":"wiki/../../escape.md","from":"a","to":"b"}' \
+  '{"id":"anchor:wiki/alpha/wrongrepo.md","kind":"untracked","note":"wiki/alpha/wrongrepo.md"}' \
+  '{"id":"tag:wiki/alpha/nosrc.md:bash-tricks","kind":"untracked","note":"wiki/alpha/session.md"}' >>"$TMPROOT/a.jsonl"
+cp "$VAULT/wiki/alpha/wrongrepo.md" "$TMPROOT/wrongrepo.before"
 cp "$VAULT/wiki/alpha/nosrc.md" "$TMPROOT/nosrc.before"
 cp "$VAULT/wiki/alpha/cross.md" "$TMPROOT/cross.before"
 cp "$VAULT/wiki/alpha/session.md" "$TMPROOT/session.before"
@@ -177,20 +181,22 @@ check "apply/runs" "$([[ $rc -eq 0 && "$out" == TIDY-DECIDE:* ]]; echo $?)" "rc=
 check "apply/negative-control-missing-file" "$(cmp -s "$VAULT/wiki/alpha/nosrc.md" "$TMPROOT/nosrc.before" && grep -q '^REFUSED anchor:wiki/alpha/nosrc.md' "$TMPROOT/apply.out"; echo $?)" "out: [$out] note: [$(cat "$VAULT/wiki/alpha/nosrc.md")]"
 check "apply/negative-control-wrong-repo" "$(cmp -s "$VAULT/wiki/alpha/cross.md" "$TMPROOT/cross.before" && grep -q '^REFUSED anchor:wiki/alpha/cross.md' "$TMPROOT/apply.out"; echo $?)" "out: [$out]"
 check "apply/negative-control-folder-alias" "$(cmp -s "$VAULT/wiki/misc/tool.md" "$TMPROOT/tool.before" && grep -q '^REFUSED anchor:wiki/misc/tool.md' "$TMPROOT/apply.out"; echo $?)" "out: [$out]"
+check "apply/negative-control-wrong-repo-untracked" "$(cmp -s "$VAULT/wiki/alpha/wrongrepo.md" "$TMPROOT/wrongrepo.before" && grep -q '^REFUSED anchor:wiki/alpha/wrongrepo.md' "$TMPROOT/apply.out"; echo $?)" "out: [$out]"
+check "apply/refuses-unbound-edit" "$(grep -q '^REFUSED tag:wiki/alpha/nosrc.md:bash-tricks: not an edit this question offers' "$TMPROOT/apply.out"; echo $?)" "out: [$out]"
 check "apply/refuses-path-escape" "$(grep -q '^REFUSED x' "$TMPROOT/apply.out"; echo $?)" "out: [$out]"
 check "apply/anchor-written-crlf-kept" "$(grep -q $'^source: alpha/lib/new.sh\r$' "$VAULT/wiki/alpha/renamed.md" && ! grep -qv $'\r$' "$VAULT/wiki/alpha/renamed.md"; echo $?)" "note: [$(od -c "$VAULT/wiki/alpha/renamed.md" | head -5)]"
 BRAIN_ROOT="$VAULT" node "$ANCH" wiki/alpha/renamed.md wiki/misc/cross2.md >/dev/null 2>&1; rc=$?
 check "apply/anchors-pass-gate" "$([[ $rc -eq 0 ]]; echo $?)" "check-anchors rc=$rc"
 check "apply/tag-folded" "$(grep -q '^tags: \[ops, constraint\]$' "$VAULT/wiki/misc/cross2.md"; echo $?)" "note: [$(cat "$VAULT/wiki/misc/cross2.md")]"
 body="$(cat "$VAULT/wiki/alpha/linker.md")"
-check "apply/link-keeps-alias-heading" "$([[ "$body" == *'[[_COMMUNITY_Split One|the old cluster]]'* && "$body" == *'[[_COMMUNITY_Split One#Members]]'* && "$body" == *'[[_COMMUNITY_Split Two]]'* ]]; echo $?)" "body: [$body]"
+check "apply/link-keeps-alias-heading" "$([[ "$body" == *'[[_COMMUNITY_Split One|the old cluster]]'* && "$body" == *'[[_COMMUNITY_Split One#Members]]'* ]]; echo $?)" "body: [$body]"
 check "apply/unanswered-listed-untouched" "$(grep -q '^UNANSWERED anchor:wiki/alpha/session.md' "$TMPROOT/apply.out" && cmp -s "$VAULT/wiki/alpha/session.md" "$TMPROOT/session.before"; echo $?)" "out: [$out]"
 
 # --- 3. freshness after apply ---------------------------------------------------
 scan "$TMPROOT/after.json"
 check "fresh/broken-source-drops" "$([[ "$(count "$TMPROOT/before.json" broken-source wiki/alpha/renamed.md)" == 1 && "$(count "$TMPROOT/after.json" broken-source wiki/alpha/renamed.md)" == 0 ]]; echo $?)" "before/after"
 check "fresh/singletons-cleared" "$(node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));process.exit(a.some(x=>x.kind==="singleton-tag"&&/^constraints?$/.test(x.tag))?1:0)' "$TMPROOT/after.json"; echo $?)" "after: [$(grep -A1 singleton "$TMPROOT/after.json" | grep tag)]"
-check "fresh/stub-links-fixed" "$([[ "$(count "$TMPROOT/after.json" dead-link wiki/alpha/linker.md)" == 0 ]]; echo $?)" "after dead: [$(count "$TMPROOT/after.json" dead-link)]"
+check "fresh/stub-links-fixed" "$([[ "$(count "$TMPROOT/before.json" dead-link wiki/alpha/linker.md)" == 3 && "$(count "$TMPROOT/after.json" dead-link wiki/alpha/linker.md)" == 1 ]]; echo $?)" "after dead: [$(count "$TMPROOT/after.json" dead-link)]"
 newf="$(node -e 'const fs=require("fs");const k=x=>JSON.stringify(x);const b=new Set(JSON.parse(fs.readFileSync(process.argv[1],"utf8")).map(k));
   process.stdout.write(JSON.parse(fs.readFileSync(process.argv[2],"utf8")).filter(x=>!b.has(k(x))).map(k).join("\n"))' "$TMPROOT/before.json" "$TMPROOT/after.json")"
 check "fresh/no-new-findings" "$([[ -z "$newf" ]]; echo $?)" "new: [$newf]"
@@ -198,14 +204,14 @@ check "fresh/no-new-findings" "$([[ -z "$newf" ]]; echo $?)" "new: [$newf]"
 # --- 4. drop/remove options -------------------------------------------------------
 : >"$TMPROOT/a.jsonl"
 pick tag:wiki/alpha/nosrc.md:bash-tricks 'Drop tag'
-printf '%s\n' '{"id":"r","kind":"link","note":"wiki/alpha/linker.md","from":"_COMMUNITY_Split Two","to":null}' >>"$TMPROOT/a.jsonl"
+pick 'link:wiki/alpha/linker.md:_COMMUNITY_Aliased Label' 'Remove link'
 pick anchor:wiki/alpha/nosrc.md alpha/docs/guide.md
 pick anchor:wiki/alpha/cross.md 'Mark source_untracked'
 BRAIN_ROOT="$VAULT" node "$TD" apply "$Q" "$TMPROOT/a.jsonl" >"$TMPROOT/apply.out" 2>&1
 check "apply/source-inserted" "$(grep -q '^source: alpha/docs/guide.md$' "$VAULT/wiki/alpha/nosrc.md" && [[ "$(sed -n 1p "$VAULT/wiki/alpha/nosrc.md")" == --- ]]; echo $?)" "note: [$(cat "$VAULT/wiki/alpha/nosrc.md")]"
 check "apply/untracked-set" "$(sed -n '/^---$/,/^---$/p' "$VAULT/wiki/alpha/cross.md" | grep -q '^source_untracked: true$'; echo $?)" "note: [$(cat "$VAULT/wiki/alpha/cross.md")]"
 check "apply/drop-tag" "$(grep -q '^tags: \[shell\]$' "$VAULT/wiki/alpha/nosrc.md"; echo $?)" "note: [$(cat "$VAULT/wiki/alpha/nosrc.md")] out: [$(cat "$TMPROOT/apply.out")]"
-check "apply/remove-link-unwraps" "$(grep -q 'and Split Two\.$' "$VAULT/wiki/alpha/linker.md"; echo $?)" "body: [$(cat "$VAULT/wiki/alpha/linker.md")]"
+check "apply/remove-link-unwraps" "$(grep -q 'and Aliased Label\.$' "$VAULT/wiki/alpha/linker.md"; echo $?)" "body: [$(cat "$VAULT/wiki/alpha/linker.md")]"
 
 echo
 echo "$PASSED passed, $FAILED failed"

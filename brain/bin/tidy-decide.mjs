@@ -14,10 +14,12 @@
 // <scan.json> is `freshness.mjs --json` output.
 //
 // questions — one JSON object per line, grouped tag-pair, tag, anchor, link:
-//   {id, group, header, question, options: [{label, description, apply: [edit]}]}
+//   {id, group, header, question, options: [{label, description, apply: [edit]}],
+//    other?: edit-without-to}
 //   2–4 options each (AskUserQuestion's limits; it adds "Other" itself). The
 //   chosen option's `apply` edits go into answers.jsonl verbatim. An "Other"
-//   answer is written by hand as one edit with the question's id.
+//   answer is the question's `other` edit with `to` filled in (a tag pair has
+//   none: its free-text answer is not applied).
 //   Candidates:
 //     anchor — git rename history in the anchor's repo, same-basename tracked
 //              files in every registered repo (longest shared path suffix first),
@@ -34,7 +36,8 @@
 //
 // apply — edits: {id, kind: "anchor", note, from?, to} | {id, kind: "untracked",
 //   note} | {id, kind: "tag", note, from, to|null} | {id, kind: "link", note,
-//   from, to|null} | {id, kind: "leave"}. Each is validated on its own: an anchor
+//   from, to|null} | {id, kind: "leave"}. Each must be an edit its question
+//   offers (same id, kind, note and from; one per question). Then: an anchor
 //   that does not classify `verified`, a tag the note lacks, a link target that
 //   resolves to nothing, or a note path outside wiki/ (or in wiki/_drafts/) is
 //   REFUSED and the file is not touched. Frontmatter and [[link]] text only; line
@@ -177,15 +180,20 @@ function anchorQuestions(vault, scan, verify) {
     const what = it.from
       ? `source \`${it.from}\` is ${it.state === 'unresolvable' ? `unverifiable (${it.reason})` : it.state === 'mismatch' ? 'in another repo than the note\'s area' : 'broken'}`
       : 'has no source: anchor';
-    qs.push({
-      id, group: 'anchor', header: 'Anchor',
-      question: `${note} ${what}.${rejected.length ? ` Found ${rejected.join(', ')}, rejected by the wrong-repo check.` : ''} Re-anchor to?`,
-      options: [
-        ...cands.map((c) => ({ label: c.src, description: c.why, apply: [edit(c.src)] })),
-        { label: 'Mark source_untracked', description: 'absence of a tracked file is the documented fact', apply: [{ id, kind: 'untracked', note }] },
-        { label: 'Leave', description: 'no change; stays in the queue', apply: [{ id, kind: 'leave' }] },
-      ],
-    });
+    const options = [
+      ...cands.map((c) => ({ label: c.src, description: c.why, apply: [edit(c.src)] })),
+      // A wrong-repo anchor is fixed by qualifying it, never by switching its
+      // check off: source_untracked would hide the mismatch, not resolve it.
+      ...(it.state === 'mismatch' ? [] : [{ label: 'Mark source_untracked', description: 'absence of a tracked file is the documented fact', apply: [{ id, kind: 'untracked', note }] }]),
+      { label: 'Leave', description: 'no change; stays in the queue', apply: [{ id, kind: 'leave' }] },
+    ];
+    // AskUserQuestion needs two options; a lone "Leave" is not a question.
+    if (options.length >= 2)
+      qs.push({
+        id, group: 'anchor', header: 'Anchor',
+        question: `${note} ${what}.${rejected.length ? ` Found ${rejected.join(', ')}, rejected by the wrong-repo check.` : ''} Re-anchor to?`,
+        options, other: edit(undefined),
+      });
   }
   return qs;
 }
@@ -239,7 +247,7 @@ function tagQuestions(vault, scan) {
     ];
     // Dropping a note's only tag trades this finding for a no-tags one.
     if (own.length > 1) options.push({ label: 'Drop tag', description: `remove \`${s.tag}\``, apply: [{ id, kind: 'tag', note: s.note, from: s.tag, to: null }] });
-    if (options.length >= 2) qs.push({ id, group: 'tag', header: 'Tag', question: `\`${s.tag}\` is used only by ${s.note}. Retag?`, options });
+    if (options.length >= 2) qs.push({ id, group: 'tag', header: 'Tag', question: `\`${s.tag}\` is used only by ${s.note}. Retag?`, options, other: { id, kind: 'tag', note: s.note, from: s.tag } });
   }
   return qs;
 }
@@ -296,7 +304,7 @@ function linkQuestions(vault, scan, verify) {
     if (v && !cands.some((c) => c.name === v.replacement)) cands.push({ name: v.replacement, why: `/brain:verify found it (${v.date})` });
     const display = d.target.replace(/^_COMMUNITY_/, '');
     qs.push({
-      id, group: 'link', header: 'Stub link',
+      id, group: 'link', header: 'Stub link', other: { id, kind: 'link', note: d.note, from: d.target },
       question: `${d.note} links [[${d.target}]], which no stub answers to any more.${old ? '' : ' The old stub is not in vault git history.'} Point it at?`,
       options: [
         ...cands.slice(0, 2).map((c) => ({ label: c.name, description: c.why, apply: [{ id, kind: 'link', note: d.note, from: d.target, to: c.name }] })),
@@ -327,6 +335,16 @@ function editFrontmatter(text, fn) {
   return block == null ? null : text.slice(0, at) + block + text.slice(at + m[2].length);
 }
 
+// An edit must answer an emitted question with an edit that question offers:
+// same kind, note and `from`. Only `to` is free (an "Other" answer fills the
+// question's `other` template).
+function unbound(q, e) {
+  if (!q) return 'answers no question in the questions file';
+  const offered = [...q.options.flatMap((o) => o.apply), ...(q.other ? [q.other] : [])];
+  return offered.some((o) => o.kind === e.kind && o.note === e.note && o.from === e.from)
+    ? null : `not an edit this question offers (${e.kind}${e.note ? ` on ${e.note}` : ''})`;
+}
+
 function applyEdit(vault, ctx, targets, e) {
   if (e.kind === 'leave') return 'left as is';
   if (typeof e.note !== 'string' || !/^wiki\/[^\\]+\.md$/.test(e.note) || e.note.split('/').includes('..')) throw new Error('note must be a wiki/…/.md path');
@@ -350,7 +368,10 @@ function applyEdit(vault, ctx, targets, e) {
     });
     if (next == null) throw new Error(e.from ? `source: no longer contains \`${e.from}\`` : 'note already has a source:');
   } else if (e.kind === 'untracked') {
-    next = editFrontmatter(text, (fm, eol) => (/^source_untracked:/m.test(fm) ? fm.replace(/^source_untracked:.*$/m, 'source_untracked: true') : `${fm}${eol}source_untracked: true`));
+    const fm = parseFrontmatter(text);
+    if (classifyAnchors(ctx, { rel: e.note, source: fm.source }).some((a) => a.state === 'mismatch'))
+      throw new Error('source: is in another repo than the note\'s area; qualify it, do not mark it untracked');
+    next =editFrontmatter(text, (fm, eol) => (/^source_untracked:/m.test(fm) ? fm.replace(/^source_untracked:.*$/m, 'source_untracked: true') : `${fm}${eol}source_untracked: true`));
   } else if (e.kind === 'tag') {
     if (e.to != null && !/^[\w][\w./-]*$/.test(e.to)) throw new Error('bad tag');
     next = editFrontmatter(text, (fm) => {
@@ -395,6 +416,7 @@ function main(argv) {
   if (mode !== 'apply' || !a || !b) die('usage: questions <scan.json> | apply <questions.jsonl> <answers.jsonl>');
 
   const questions = readLines(a);
+  const byId = new Map(questions.map((q) => [q.id, q]));
   const ctx = buildAnchorContext(vault);
   const targets = linkTargets(vault);
   const answered = new Set();
@@ -404,8 +426,12 @@ function main(argv) {
     let e;
     try { e = JSON.parse(l); } catch { refused++; out.push(`REFUSED line ${i + 1}: not JSON`); return; }
     const id = e?.id ?? `line ${i + 1}`;
+    const dup = answered.has(id);
     answered.add(id);
     try {
+      if (dup) throw new Error('second answer for this question');
+      const why = unbound(byId.get(id), e);
+      if (why) throw new Error(why);
       const what = applyEdit(vault, ctx, targets, e);
       if (e.kind === 'leave') left++; else applied++;
       out.push(`${e.kind === 'leave' ? 'LEFT' : 'APPLIED'} ${id}: ${what}`);
