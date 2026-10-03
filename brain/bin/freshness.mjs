@@ -519,11 +519,15 @@ L.push('## Tag landscape (cross-cutting first)');
 L.push(landscape.length ? landscape.map(([t, ns]) => `\`${t}\`×${ns.length}`).join(' · ') : '_No tags._');
 L.push('');
 
-const total =
-  deadLinks.length + orphans.length + stale.length + brokenSources.length +
-  areaMismatchSources.length +
-  noFrontmatter.length + noTags.length + badEnums.length + detachedKnowledge.length + hotBloat.length +
-  mirrorIslands.length + genericLabelRepos.length + noReportRepos.length;
+// The lists that make up the review total. --json marks a finding `counted`
+// by membership here (INNOV-374), so the flag and the total cannot drift.
+const countedLists = new Set([
+  deadLinks, orphans, stale, brokenSources,
+  areaMismatchSources,
+  noFrontmatter, noTags, badEnums, detachedKnowledge, hotBloat,
+  mirrorIslands, genericLabelRepos, noReportRepos,
+]);
+const total = [...countedLists].reduce((n, list) => n + list.length, 0);
 L.push('---');
 L.push(total === 0 ? '✅ Clean — no issues found.' : `⚠️ ${total} item(s) to review.`);
 const report = L.join('\n') + '\n';
@@ -532,9 +536,10 @@ if (TO_JSON) {
   // One object per finding: `kind`, the vault-relative `note` where there is
   // one, and the fields the Markdown line renders. Every Markdown section maps
   // to a kind; `low-confidence` is the one kind with no Markdown section.
+  // `counted` is true exactly when the finding is in the review total.
   const relf = (f) => relative(VAULT, f).replace(/\\/g, '/');
   const findings = [];
-  const add = (kind, list, fields) => { for (const x of list) findings.push({ kind, ...fields(x) }); };
+  const add = (kind, list, fields) => { for (const x of list) findings.push({ kind, ...fields(x), counted: countedLists.has(list) }); };
   add('dead-link', deadLinks, (d) => ({ note: d.from, target: d.target }));
   add('orphan', orphans, (o) => ({ note: o }));
   add('stale', stale, (s) => ({ note: s.from, date: s.date, age: s.age }));
