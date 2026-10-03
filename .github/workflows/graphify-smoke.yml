@@ -1,0 +1,112 @@
+name: graphify smoke
+
+# INNOV-370: prove graphify installs and builds a code-only graph on a hosted
+# runner, and measure whether PYTHONHASHSEED=0 gives stable community ids
+# across two clean builds. Manual only; no secrets, no vault, no LLM key.
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  smoke:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        shell: bash
+    env:
+      # Keep in sync with brain/skills/init/SKILL.md and brain/skills/doctor/SKILL.md
+      # (tests/test-graphify-smoke.sh fails on drift).
+      GRAPHIFY_VERSION: '0.8.46'
+      PYTHONHASHSEED: '0'
+      TARGET: brain/bin
+      OUT: brain/bin/graphify-out # graphify writes next to the target, not the cwd
+      SMOKE: ${{ github.workspace }}/smoke
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install uv
+        run: python -m pip install uv
+
+      - name: Install graphify
+        run: |
+          mkdir -p "$SMOKE"
+          start=$(date +%s)
+          uv tool install graphifyy==0.8.46
+          echo "install_seconds=$(( $(date +%s) - start ))" >> "$SMOKE/timings.txt"
+          uv tool dir --bin >> "$GITHUB_PATH"
+
+      - name: Check graphify version
+        run: |
+          out=$(graphify --version)
+          echo "$out"
+          got=${out##* }
+          if [ "$got" != "$GRAPHIFY_VERSION" ]; then
+            echo "::error::graphify --version reported '$got', expected '$GRAPHIFY_VERSION'"
+            exit 1
+          fi
+
+      - name: Build 1 (code-only)
+        run: |
+          start=$(date +%s)
+          graphify "$TARGET" < /dev/null
+          echo "build1_seconds=$(( $(date +%s) - start ))" >> "$SMOKE/timings.txt"
+          python - <<'EOF'
+          import json, os, sys
+          path = os.path.join(os.environ["OUT"], "graph.json")
+          if not os.path.isfile(path):
+              sys.exit(f"::error::{path} missing")
+          nodes = json.load(open(path))["nodes"]
+          if not nodes:
+              sys.exit(f"::error::{path} has no nodes")
+          print(f"{len(nodes)} nodes")
+          EOF
+          cp "$OUT/graph.json" "$SMOKE/graph-build1.json"
+
+      - name: Build 2 (clean) and compare communities
+        run: |
+          rm -rf "$OUT"
+          start=$(date +%s)
+          graphify "$TARGET" < /dev/null
+          echo "build2_seconds=$(( $(date +%s) - start ))" >> "$SMOKE/timings.txt"
+          cp "$OUT/graph.json" "$SMOKE/graph-build2.json"
+          # A non-zero count is the result being measured, not a failure.
+          python - <<'EOF' | tee "$SMOKE/determinism.txt"
+          import json, os
+          d = os.environ["SMOKE"]
+          a, b = ({n["id"]: n.get("community") for n in json.load(open(f"{d}/graph-build{i}.json"))["nodes"]} for i in (1, 2))
+          ids = a.keys() | b.keys()
+          changed = sum(1 for i in ids if a.get(i, "<absent>") != b.get(i, "<absent>"))
+          print(f"nodes_build1={len(a)}")
+          print(f"nodes_build2={len(b)}")
+          print(f"communities_build1={len(set(a.values()))}")
+          print(f"communities_build2={len(set(b.values()))}")
+          print(f"nodes_changed_community={changed}")
+          EOF
+
+      - name: Job summary
+        if: always()
+        run: |
+          {
+            echo "## graphify smoke"
+            echo
+            echo "graphify \`$GRAPHIFY_VERSION\`, \`PYTHONHASHSEED=$PYTHONHASHSEED\`, target \`$TARGET\`"
+            echo
+            echo '```'
+            cat "$SMOKE/timings.txt" "$SMOKE/determinism.txt" 2>/dev/null || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: graphify-smoke
+          include-hidden-files: true
+          path: |
+            ${{ env.OUT }}
+            ${{ env.SMOKE }}
