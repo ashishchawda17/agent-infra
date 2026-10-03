@@ -141,7 +141,9 @@
 #   - a branch checkout between the last HEAD check and `update-ref` (a few
 #     milliseconds) still lands the commit on the ref the run was pinned to.
 #   - a committed path another session re-stages before the sync is reset to
-#     the committed version.
+#     the committed version. The sync is skipped once HEAD moves past this
+#     commit; a commit landing in the milliseconds between that check and the
+#     reset still gets a staged revert of its paths.
 #   - if the sync cannot take the index lock, the commit stands, and the output
 #     prints the runnable command that brings the shared index back in line.
 # `commit-tree` runs no hooks and signs only with -S, so step 8 runs the
@@ -351,8 +353,13 @@ else
 fi
 
 # --- 4. branch guards (ALL of them run before anything is staged) -----------
-CUR_BRANCH="$(git -C "$VAULT" rev-parse --abbrev-ref HEAD 2>/dev/null || true)"
-CUR_SHA="$(git -C "$VAULT" rev-parse HEAD 2>/dev/null || true)"
+# REF is the ref the commit moves, and the branch and SHA every guard below
+# judges are both derived from it, in one snapshot. Not `HEAD`: update-ref HEAD
+# follows whatever HEAD points at by then, so a checkout during the guards (the
+# `gh` call takes seconds) would move a branch none of them evaluated.
+REF="$(git -C "$VAULT" symbolic-ref -q HEAD 2>/dev/null || echo HEAD)"
+CUR_BRANCH="${REF#refs/heads/}"
+CUR_SHA="$(git -C "$VAULT" rev-parse -q --verify "$REF^{commit}" 2>/dev/null || true)"
 
 # HEAD PIN. Format BRANCH:SHA, as the caller saw it before it started working.
 # A malformed pin is a REFUSAL, not an ignored argument — a caller that meant to
@@ -420,10 +427,6 @@ if [[ $FORCE_COMMIT -eq 0 ]]; then
   fi
 fi
 
-# The ref the commit moves, captured with CUR_SHA. Not `HEAD`: update-ref HEAD
-# follows whatever HEAD points at by then, so a `checkout -b` at the same SHA
-# would pass the compare-and-swap and take the commit.
-REF="$(git -C "$VAULT" symbolic-ref -q HEAD 2>/dev/null || echo HEAD)"
 [[ -n "$CUR_SHA" ]] || refuse "'${CUR_BRANCH:-HEAD}' has no commit yet" \
   "  /brain:init commits the vault scaffold first; commit that by hand, then re-run."
 
@@ -491,9 +494,11 @@ if [[ ${#foreign[@]} -gt 0 ]]; then
 fi
 # Now base the private index on HEAD, so the commit is HEAD plus what this run
 # stages and nothing from the shared index, stale or not, can reach it. A
-# single-tree `read-tree -m` keeps the stat cache for unchanged entries.
-git_private read-tree -m "$CUR_SHA" >/dev/null 2>&1 ||
-  refuse "could not reset the private index to HEAD (unmerged paths?)" "$UNTOUCHED"
+# pathspec reset keeps the stat cache for unchanged entries; `read-tree -m`
+# would too, but refuses a stale entry ("not uptodate") and wedge every save.
+if ! reset_err="$(git_private reset -q "$CUR_SHA" -- . 2>&1)"; then
+  refuse "could not reset the private index to HEAD" "$(printf '    %s\n' "$reset_err")" "$UNTOUCHED"
+fi
 
 # --- 6. stage, into the private index ---------------------------------------
 # Entries that match nothing in the working tree are skipped rather than passed
@@ -529,7 +534,22 @@ for entry in "${PATHS[@]}"; do
   staged_any=1
 done
 
-# --- 7. VERIFY THE TREE -----------------------------------------------------
+# --- 7. pre-commit, then VERIFY THE TREE ------------------------------------
+# Hooks run as `git commit` runs them: from the vault root, against the index
+# being committed (here the private one). core.hooksPath is honoured through
+# --git-path. Called directly rather than via `git hook run` (git 2.36+).
+# pre-commit runs BEFORE write-tree, so what it stages is in the tree verified
+# below, and a path it stages outside the allowlist is refused there.
+HOOKS_DIR="$(cd "$VAULT" && cd "$(git rev-parse --git-path hooks)" 2>/dev/null && pwd)"
+run_hook() { # name [args...]
+  local hook="$HOOKS_DIR/$1" out; shift
+  [[ -n "$HOOKS_DIR" && -x "$hook" ]] || return 0
+  if ! out="$(cd "$VAULT" && GIT_INDEX_FILE="$PRIVATE_INDEX" "$hook" "$@" 2>&1)"; then
+    refuse "the $(basename "$hook") hook rejected the commit" "$(printf '    %s\n' "$out")" "$UNTOUCHED"
+  fi
+}
+[[ $staged_any -eq 1 ]] && run_hook pre-commit
+
 # The tree object is what step 8 commits, byte for byte, so this checks the
 # commit itself rather than an index another process can still change.
 if ! TREE="$(git_private write-tree 2>&1)"; then
@@ -563,18 +583,6 @@ fi
 
 # --- 8. commit, then move the branch by compare-and-swap --------------------
 # `git commit -m` cleans whitespace; commit-tree takes the message verbatim.
-# Hooks run as `git commit` runs them: from the vault root, against the index
-# being committed (here the private one). core.hooksPath is honoured through
-# --git-path. Called directly rather than via `git hook run` (git 2.36+).
-HOOKS_DIR="$(cd "$VAULT" && cd "$(git rev-parse --git-path hooks)" 2>/dev/null && pwd)"
-run_hook() { # name [args...]
-  local hook="$HOOKS_DIR/$1" out; shift
-  [[ -n "$HOOKS_DIR" && -x "$hook" ]] || return 0
-  if ! out="$(cd "$VAULT" && GIT_INDEX_FILE="$PRIVATE_INDEX" "$hook" "$@" 2>&1)"; then
-    refuse "the $(basename "$hook") hook rejected the commit" "$(printf '    %s\n' "$out")" "$UNTOUCHED"
-  fi
-}
-run_hook pre-commit
 printf '%s\n' "$MESSAGE" >"$PRIVATE_INDEX.msg"
 run_hook commit-msg "$PRIVATE_INDEX.msg"
 MESSAGE="$(git stripspace <"$PRIVATE_INDEX.msg")"
@@ -613,14 +621,24 @@ printf '  %s\n' "${STAGED[@]}"
 # Until this runs, the shared index holds the pre-commit blobs for them, so
 # `git status` shows them as staged reverts. No vault commit can carry those
 # (step 5 bases on HEAD), but a raw `git commit` would. Retried: the lock is
-# usually held for milliseconds.
+# usually held for milliseconds. Each try first checks that HEAD is still this
+# commit: once another commit lands on top, resetting to this one would stage a
+# revert of it, and that commit's own sync owns the index.
+# Returns 0 synced, 1 failed (lock), 2 skipped (HEAD is no longer this commit).
 sync_index() {
+  [[ "$(git -C "$VAULT" symbolic-ref -q HEAD 2>/dev/null || echo HEAD)" == "$REF" &&
+     "$(git -C "$VAULT" rev-parse -q --verify HEAD 2>/dev/null)" == "$NEW" ]] || return 2
   printf '%s\0' "${STAGED[@]}" | git --literal-pathspecs -C "$VAULT" \
-    reset -q "$NEW" --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1
+    reset -q "$NEW" --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1 || return 1
 }
-if [[ "$(git -C "$VAULT" symbolic-ref -q HEAD 2>/dev/null || echo HEAD)" != "$REF" ]]; then
-  echo "  NOTE: the checkout left '$REF' during the commit; its index was not changed."
-elif ! { sync_index || { sleep 1; sync_index; } || { sleep 2; sync_index; }; }; then
+for delay in 0 1 2; do
+  sleep "$delay"
+  sync_index; sync_rc=$?
+  [[ $sync_rc -eq 1 ]] || break
+done
+if [[ $sync_rc -eq 2 ]]; then
+  echo "  NOTE: HEAD moved past this commit before the index sync; the index was left alone."
+elif [[ $sync_rc -eq 1 ]]; then
   echo "  WARNING: the shared index is locked and still holds the pre-commit versions"
   echo "  of the paths above (shown as staged reverts in git status). Run:"
   printf '    git -C %q reset -q HEAD --' "$VAULT"

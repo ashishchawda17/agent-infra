@@ -565,16 +565,21 @@ assert_eq "blob/no-private-index-left" "0" \
 # just before the guard's commit step (`commit-tree` now, `commit` before
 # INNOV-375, so the case fails against the old script), then runs the real git.
 REAL_GIT="$(command -v git)"
-make_git_wrap() { # action-script
+make_git_wrap() { # action-script [trigger-arg-pattern]
   GIT_WRAP="$BOX/wrap"
   mkdir -p "$GIT_WRAP"
   cat >"$GIT_WRAP/git" <<SH
 #!/usr/bin/env bash
 for a in "\$@"; do
   case "\$a" in
-    commit|commit-tree)
+    ${2:-commit|commit-tree})
       if [[ ! -f "$BOX/wrap/fired" ]]; then
         : >"$BOX/wrap/fired"
+        if [[ "${3:-}" == after ]]; then
+          "$REAL_GIT" "\$@"; rc=\$?
+          ( unset GIT_INDEX_FILE; cd "$VAULT" && $1 ) >/dev/null 2>&1
+          exit \$rc
+        fi
         ( unset GIT_INDEX_FILE; cd "$VAULT" && $1 ) >/dev/null 2>&1
       fi
       break ;;
@@ -700,6 +705,69 @@ make_dirty
 run_guard -m "save"
 assert_eq "hooks/commit-msg-commits" "0" "$STATUS" "$(evidence)"
 assert_contains "hooks/commit-msg-applied" "Hooked: yes" "$(git -C "$VAULT" log -1 --format=%B)" "$(evidence)"
+
+# --- 21d4h. a checkout during the guards' `gh` call refuses ------------------
+# The ref the commit moves is captured with the branch the guards judge. A
+# checkout while `gh` runs must not let the commit land on the new branch.
+sb_new "brain/work"
+mkdir -p "$BOX/gh-checkout"
+printf '#!/usr/bin/env bash\n[[ "${1:-}" == pr ]] && ( cd "%s" && git checkout -q -b other ) >/dev/null 2>&1\necho ""\nexit 0\n' "$VAULT" >"$BOX/gh-checkout/gh"
+chmod +x "$BOX/gh-checkout/gh"
+GH_PATH="$BOX/gh-checkout"
+make_dirty
+before="$(head_sha)"
+run_guard -m "loses the race"
+assert_eq "guards/checkout-during-gh-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "guards/checkout-during-gh-pinned-unmoved" "$before" "$(git -C "$VAULT" rev-parse brain/work)" "$(evidence)"
+assert_eq "guards/checkout-during-gh-new-unmoved" "$before" "$(git -C "$VAULT" rev-parse other 2>/dev/null)" "$(evidence)"
+
+# --- 21d4i. a newer commit before the index sync is not reverted ------------
+# Another session commits wiki/log.md right after this run's ref update. The
+# sync must not reset the shared index back to this run's (older) commit.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+make_dirty
+make_git_wrap "echo newer >>wiki/log.md && '$REAL_GIT' add wiki/log.md && '$REAL_GIT' commit -qm newer" "update-ref" after
+run_guard -m "save"
+GIT_WRAP=""
+assert_eq "sync/newer-commit-ours-ok" "0" "$STATUS" "$(evidence)"
+assert_eq "sync/newer-commit-is-head" "newer" "$(head_subject)" "$(evidence)"
+assert_eq "sync/newer-commit-not-reverted-in-index" "0" "$(staged_count)" "staged: [$(staged_list | tr '\n' ' ')]" "$(evidence)"
+
+# --- 21d4j. a stale entry for a TRACKED file does not wedge the next save -----
+# A missed sync leaves `MM wiki/log.md` (index at the old blob). Resetting the
+# private index with `read-tree -m` refused that ("not uptodate") on every run.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+make_dirty
+run_guard -m "first" -- wiki/log.md
+log_blob="$(git -C "$VAULT" rev-parse HEAD:wiki/log.md)"
+git -C "$VAULT" reset -q HEAD~ -- wiki/log.md >/dev/null 2>&1   # the sync that never ran
+echo "a log" >"$VAULT/logs/2026-10-03.md"
+run_guard -m "second" -- logs/
+assert_eq "stale/tracked-second-commits" "0" "$STATUS" "$(evidence)"
+assert_eq "stale/tracked-not-reverted" "$log_blob" "$(git -C "$VAULT" rev-parse HEAD:wiki/log.md)" "$(evidence)"
+
+# --- 21d4k. what pre-commit stages is committed, and verified ----------------
+# `git commit` writes the tree after pre-commit, so a hook's staged fix ships.
+# The allowlist check runs on that tree: a hook staging chats/ is refused.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+printf '#!/usr/bin/env bash\necho generated >wiki/hot.md && git add wiki/hot.md\n' >"$VAULT/.git/hooks/pre-commit"
+chmod +x "$VAULT/.git/hooks/pre-commit"
+make_dirty
+run_guard -m "save"
+assert_eq "hooks/pre-commit-staging-commits" "0" "$STATUS" "$(evidence)"
+assert_eq "hooks/pre-commit-staged-file-shipped" "generated" "$(git -C "$VAULT" show HEAD:wiki/hot.md | tr -d '\r')" "$(evidence)"
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+printf '#!/usr/bin/env bash\nmkdir -p chats && echo x >chats/h.md && git add -f chats/h.md\n' >"$VAULT/.git/hooks/pre-commit"
+chmod +x "$VAULT/.git/hooks/pre-commit"
+make_dirty
+before="$(head_sha)"
+run_guard -m "save"
+assert_eq "hooks/pre-commit-forbidden-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "hooks/pre-commit-forbidden-head-unmoved" "$before" "$(head_sha)" "$(evidence)"
 
 # --- 21d5. a successful commit leaves the shared index in line with HEAD -----
 # The committed paths are reset to the new commit in the shared index; without
