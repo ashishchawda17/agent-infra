@@ -2,6 +2,7 @@
 # test-install-graphify.sh — brain/bin/install-graphify.sh checks the wheel's
 # sha256 before uv ever sees it (INNOV-358). uv is stubbed, so nothing installs.
 set -u
+unset BRAIN_ROOT CLAUDE_PROJECT_DIR
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 ROOT=$PWD
 SCRIPT=$ROOT/brain/bin/install-graphify.sh
