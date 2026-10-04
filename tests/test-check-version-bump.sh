@@ -11,6 +11,7 @@
 # Run:  bash tests/test-check-version-bump.sh   (from anywhere)
 # No network. Requires a real `node` on PATH (the script uses it to parse JSON).
 set -uo pipefail
+unset BRAIN_ROOT CLAUDE_PROJECT_DIR  # never the real vault; see test-suite-isolation.sh
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/.." && pwd)"

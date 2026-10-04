@@ -4,6 +4,7 @@
 # silently break: the trigger, the permissions, and the graphify pin drifting
 # away from the one /brain:init and /brain:doctor install.
 set -u
+unset BRAIN_ROOT CLAUDE_PROJECT_DIR  # never the real vault; see test-suite-isolation.sh
 cd "$(dirname "${BASH_SOURCE[0]}")/.."
 
 WF=.github/workflows/graphify-smoke.yml

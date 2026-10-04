@@ -12,6 +12,7 @@
 # Run:  bash tests/test-bash32-portability.sh   (from anywhere)
 # No network, no vault, no interpreters beyond grep.
 set -uo pipefail
+unset BRAIN_ROOT CLAUDE_PROJECT_DIR  # never the real vault; see test-suite-isolation.sh
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/.." && pwd)"
