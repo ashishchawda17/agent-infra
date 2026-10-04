@@ -39,7 +39,7 @@
 // Pure Node, no deps. Read-only: nothing here writes, commits, or fetches.
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, posix } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { resolveRepos, normalizeRemote } from './resolve-repos.mjs';
 
@@ -72,15 +72,20 @@ export function gitHas(root, rev, path) {
  * One `git ls-files` per root, cached in `cache` (the anchor context's map), so
  * a scan costs O(roots) git calls, not O(anchors) — the Windows spawn tax made
  * a per-anchor check-ignore unaffordable (INNOV-328). `--directory` collapses an
- * ignored dir to `dir/`, so any ancestor entry also counts.
+ * ignored dir to `dir/`, so any ancestor entry also counts. Lookups drop dot
+ * segments and, on the case-insensitive filesystems where existsSync matched
+ * regardless of case, fold case: check-ignore did both for free.
  */
+const FOLD = process.platform === 'win32' || process.platform === 'darwin';
+const ignoreKey = (p) => (FOLD ? p.toLowerCase() : p);
 export function gitIgnores(cache, root, path) {
+  path = ignoreKey(posix.normalize(path));
   if (!cache.has(root)) {
     let set = null;
     try {
       const out = execFileSync('git', ['-C', root, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory'],
         { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30000, maxBuffer: 64 * 1024 * 1024 });
-      set = new Set(out.split('\0').filter(Boolean));
+      set = new Set(out.split('\0').filter(Boolean).map(ignoreKey));
     } catch {}
     cache.set(root, set);
   }

@@ -466,6 +466,21 @@ assert_out_has "repo-gitignored/crlf-note" "wiki/_drafts/from-env.md — source:
 LSF="$(grep -c 'ls-files' "$BOX/git.trace" 2>/dev/null || true)"
 assert_eq "repo-gitignored/one-git-call-per-repo" "1" "$LSF" "trace: [$(grep 'ls-files' "$BOX/git.trace" 2>/dev/null | tr '\n' '|')]"
 
+# Spellings that reach the same ignored file must not slip past the lookup:
+# a dot segment everywhere, and a case variant where the filesystem is
+# case-insensitive (existsSync resolves it there, so it would verify).
+rm -f "$VAULT/wiki/_drafts/"*.md
+mknote dot-seg "demo/./dist/out.js"
+run_check
+assert_out_has "repo-gitignored/dot-segment" "0 verified, 0 broken, 1 unverifiable" "$(evidence)"
+case "$(uname -s)" in
+MINGW* | MSYS* | CYGWIN* | Darwin)
+  mknote dot-seg "demo/DIST/out.js"
+  run_check
+  assert_out_has "repo-gitignored/case-folded" "0 verified, 0 broken, 1 unverifiable" "$(evidence)"
+  ;;
+esac
+
 # --- 13. frontmatter enums are gated, not just described (INNOV-341) ------
 # INNOV-334 fixed the prose; this is the exit code. A keeper whose
 # `confidence:` or `status:` is outside the INNOV-294 enums is a stop, with a
