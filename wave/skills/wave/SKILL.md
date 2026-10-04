@@ -15,9 +15,31 @@ WAVE="${CLAUDE_PLUGIN_ROOT}/skills/wave"
 ```
 and runs from inside the target repo. `spawn.sh` holds the worker prompt — the contract,
 edited there and never per-spawn. `review.sh` is the pre-PR Codex Terra review with an
-optional Grok risk review; `tiebreak.sh` the Astra-only escalation; `triage.sh` the
+optional Grok risk review; `plan-review.sh` the risk tier's pre-code plan review (Codex
+Terra + Grok, in parallel); `tiebreak.sh` the Astra-only escalation; `triage.sh` the
 step-4 labelling pre-grep; `status.sh` steps 1 and 3; `cost.sh` per-ticket token split.
 `DRY_RUN=1 bash "$WAVE/spawn.sh" <ISSUE>` prints the prompt without spawning.
+
+## Pick the tier
+
+One primary implementer (the Claude worker) per issue, and review sized to the risk.
+Other providers review; they never re-implement the same issue. Set `TIER` per spawn:
+
+| `TIER` | For | Review |
+|---|---|---|
+| `quick` | renames, copy/UI tweaks, boilerplate, a one-function bug with a named `file:line` | one Codex Terra round, no loop. A diff that hits a risk trigger escalates itself to `normal`'s risk review. |
+| `normal` (default) | the everyday bounded feature or fix | Codex Terra, up to 3 rounds; Grok added only when the diff hits a risk trigger (auth, authorization incl. RLS, payments, public API contracts, concurrency, recovery, broad refactor) |
+| `risk` | anything you already know hits a risk trigger, or an architectural change | the worker writes `.wave-plan.md` first; Codex Terra (technical) and Grok (adversarial) review the plan in parallel before code; then the diff review always includes Grok |
+
+Astra (`tiebreak.sh`, `--plan` for the plan stage) is never a participant: at most one
+call per worker, only when Codex and Grok directly conflict and code and tests cannot
+settle it, and it gets the two verdicts plus the diff or plan, not the repo. Every
+reviewer is read-only: Codex runs `-s read-only`, the Sonnet fallback has read tools
+only, and Grok (whose CLI needs `bypassPermissions`) runs under `guard_readonly`, which
+fails the review if the worktree changed while it ran.
+
+A quick task you are present for does not need a wave at all: do it in your session.
+`TIER=quick` is for small tickets you want worked unattended alongside the rest.
 
 ## Per-repo config
 
@@ -58,7 +80,9 @@ stop and resolve it by hand — never force it. `/brain:save` fast-forwards the 
 not this repo.
 
 Then read the full comments
-(`orca worktree ps --json`), and run `/brain:save` **once** for the whole batch.
+(`orca worktree ps --json`) and, before sweeping, record the batch's cost split with
+`bash "$WAVE/cost.sh" <ISSUE>...` (worker tokens vs each Codex call; it reads the
+worktrees, so it must run before step 3). Run `/brain:save` **once** for the whole batch.
 Never per worktree: `wiki/hot.md` is a single ≤500-word rolling cache, and three
 near-duplicate entries crowd out everything else. Workers deliberately do not save.
 
@@ -68,10 +92,15 @@ only a PR body. List every merge since the last save and read those bodies too:
 git log --merges --format='%s' <last-save-sha>..HEAD | grep -o '#[0-9]*' | tr -d '#' | xargs -I{} gh pr view {} --json number,title,body
 ```
 
-Lines to look for, all from the pre-PR review (`spawn.sh` step 4.5):
+Lines to look for, from the plan review (`spawn.sh` step 1.5, risk tier) and the
+pre-PR review (step 4.5):
+`TIER: <tier>` opens every summary; `TIER: quick -> normal` means a quick ticket hit a
+risk trigger, so the label was too optimistic. `PLAN REVIEWER: codex-terra` and
+`PLAN CRITIC: grok` confirm a risk-tier plan was reviewed before code; `PLAN DISMISSED:`
+is a plan finding the worker rejected.
 `REVIEWER: codex-terra` confirms the required correctness review;
 `ARCHITECTURE REVIEWER: grok` means a named risk trigger called for an adversarial
-review; `TIE-BREAKER: astra` means those two reviews directly conflicted.
+review; `TIE-BREAKER: astra (plan|diff)` means those two reviews directly conflicted.
 `REVIEWER DISMISSED:` is a finding the worker judged wrong — check whether it was.
 `NOT FILED:` (PR body) is a real but never-observed gap the worker chose not to ticket —
 file it yourself if you know of an instance. `REVIEW ROUNDS: 3` means findings were
@@ -109,10 +138,11 @@ hands the ticket plus live excerpts to a cheap headless model (`TRIAGER=grok` de
 verdict is a hint; the label is still yours. An issue citing no `file:line` is listed
 but not judged, because that trait is what predicts a safe unsupervised run.
 
-**5. Spawn the wave**, one issue per worker:
+**5. Spawn the wave**, one issue per worker, each with its tier (see "Pick the tier"):
 ```bash
-bash "$WAVE/spawn.sh" INNOV-309
-bash "$WAVE/spawn.sh" INNOV-301
+TIER=quick bash "$WAVE/spawn.sh" INNOV-309
+bash "$WAVE/spawn.sh" INNOV-301              # normal
+TIER=risk  bash "$WAVE/spawn.sh" INNOV-305
 ```
 Pick issues that touch **different areas** — two workers in the same files produce
 conflicting PRs. Three is a comfortable width on one machine; the ceiling is usually

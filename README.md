@@ -26,7 +26,7 @@ are *consumers* that depend on it, never the reverse.
                    brain-registry.example.json, vault-skeleton/}
 └── wave/                           # second plugin (name: "wave") — /wave:wave
     ├── .claude-plugin/plugin.json
-    └── skills/wave/{SKILL.md, spawn.sh, review.sh, tiebreak.sh, triage.sh,
+    └── skills/wave/{SKILL.md, spawn.sh, review.sh, plan-review.sh, tiebreak.sh, triage.sh,
                      status.sh, cost.sh, lib.sh, config.example.env}
 ```
 

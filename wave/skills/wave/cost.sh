@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Per-ticket token split: Claude worker session vs the Codex review.
+# Per-ticket token split: Claude worker session vs each Codex call (plan review,
+# diff review, Astra tie-break), to see what each tier costs and how often Astra runs.
 #   bash "$WAVE/cost.sh" INNOV-309 INNOV-301
 # Worker numbers come from ~/.claude/projects/<worktree>/*.jsonl; review numbers from
-# the "tokens used" lines Codex leaves in .wave-review.codex-terra.err.
+# the "tokens used" lines Codex leaves in .wave-review.*.err / .wave-plan-review.*.err.
+# Grok prints no token count, so it is not listed.
 set -uo pipefail
 WS="$(dirname "$(git rev-parse --show-toplevel)")"
 for ISSUE in "$@"; do
@@ -23,10 +25,11 @@ for f in glob.glob(proj+'/*.jsonl'):
 print(issue)
 for model,c in sorted(per.items(),key=lambda kv:-kv[1]['cache_read_input_tokens']):
     print(f"  worker {model:32} cache_read={c['cache_read_input_tokens']/1e6:.1f}M cache_write={c['cache_creation_input_tokens']/1e3:.0f}k out={c['output_tokens']/1e3:.0f}k")
-err=os.path.join(wt,'.wave-review.codex-terra.err')
-if os.path.exists(err):
+for err in sorted(glob.glob(os.path.join(wt,'.wave-review.*.err'))+glob.glob(os.path.join(wt,'.wave-plan-review.*.err'))):
     txt=open(err,encoding='utf-8',errors='ignore').read()
     used=sum(int(n.replace(',','')) for n in re.findall(r'tokens used\s*\n\s*([\d,]+)',txt))
-    print(f"  review codex-terra{' '*15}total={used/1e3:.0f}k")
+    if not used: continue
+    stage=os.path.basename(err)[len('.wave-'):-len('.err')]   # review.codex-terra, plan-review.astra, ...
+    print(f"  {stage:39}total={used/1e3:.0f}k")
 PY
 done
