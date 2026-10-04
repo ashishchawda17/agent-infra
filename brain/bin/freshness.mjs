@@ -433,9 +433,9 @@ if (unverifiableSources.length) {
   }
   if (ignored.length) {
     L.push(
-      `**Git-ignored vault file (${ignored.length})** — the anchor exists on this machine but the vault's ` +
-        `\`.gitignore\` excludes it (e.g. a harvested \`chats/\` digest), so it resolves for nobody who pulls the ` +
-        `vault. A transcript is not the fact: re-anchor to the tracked file, PR or commit it derives from.`
+      `**Git-ignored file (${ignored.length})** — the anchor exists on this machine but a \`.gitignore\` ` +
+        `excludes it (a harvested \`chats/\` digest in the vault, a repo's build output or \`.env\`), so it resolves ` +
+        `for nobody else. A transcript is not the fact: re-anchor to the tracked file, PR or commit it derives from.`
     );
     L.push('');
     for (const u of ignored) L.push(`- [${u.from}](${u.from}) — \`${u.source}\``);

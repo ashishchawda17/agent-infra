@@ -39,7 +39,7 @@
 // Pure Node, no deps. Read-only: nothing here writes, commits, or fetches.
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { join, resolve } from 'node:path';
+import { join, resolve, posix } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { resolveRepos, normalizeRemote } from './resolve-repos.mjs';
 
@@ -67,16 +67,34 @@ export function gitHas(root, rev, path) {
 /**
  * Is `path` (relative to `root`) ignored by git there?
  *   true  — ignored: it exists only on the machine that wrote it
- *   false — not ignored (tracked files are never reported ignored)
- *   null  — cannot tell (not a repo, git unavailable)
+ *   false — not ignored (tracked files are never reported ignored), or cannot
+ *           tell (not a repo, git unavailable)
+ * One `git ls-files` per root, cached in `cache` (the anchor context's map), so
+ * a scan costs O(roots) git calls, not O(anchors) — the Windows spawn tax made
+ * a per-anchor check-ignore unaffordable (INNOV-328). `--directory` collapses an
+ * ignored dir to `dir/`, so any ancestor entry also counts. Lookups drop dot
+ * segments and, on the case-insensitive filesystems where existsSync matched
+ * regardless of case, fold case: check-ignore did both for free.
  */
-export function gitIgnores(root, path) {
-  try {
-    execFileSync('git', ['-C', root, 'check-ignore', '-q', '--', path], { stdio: 'ignore', timeout: 10000 });
-    return true;
-  } catch (e) {
-    return e.status === 1 ? false : null;
+const FOLD = process.platform === 'win32' || process.platform === 'darwin';
+const ignoreKey = (p) => (FOLD ? p.toLowerCase() : p);
+export function gitIgnores(cache, root, path) {
+  path = ignoreKey(posix.normalize(path));
+  if (!cache.has(root)) {
+    let set = null;
+    try {
+      const out = execFileSync('git', ['-C', root, 'ls-files', '-z', '--others', '--ignored', '--exclude-standard', '--directory'],
+        { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 30000, maxBuffer: 64 * 1024 * 1024 });
+      set = new Set(out.split('\0').filter(Boolean).map(ignoreKey));
+    } catch {}
+    cache.set(root, set);
   }
+  const set = cache.get(root);
+  if (!set) return false;
+  if (set.has(path) || set.has(path + '/')) return true; // a file, or the ignored dir itself
+  const segs = path.split('/');
+  for (let i = 1; i < segs.length; i++) if (set.has(segs.slice(0, i).join('/') + '/')) return true;
+  return false;
 }
 
 /**
@@ -199,7 +217,7 @@ export function buildAnchorContext(vault) {
   // repos.json. A name here that did not resolve above is *unresolvable*, not rot.
   const claimed = [...new Set([...covered, ...Object.keys(identity.identity || {})])];
 
-  return { vault, covered, reposDir, repoByName, claimed, remoteByName, identity };
+  return { vault, covered, reposDir, repoByName, claimed, remoteByName, identity, ignored: new Map() };
 }
 
 /**
@@ -264,7 +282,8 @@ export function classifyAnchors(ctx, note) {
     if (!src.includes('/')) continue;
 
     let resolved = null;
-    let vaultLocal = false;
+    let root = null; // checkout (or vault) the anchor resolved into, for the git-ignore check
+    let inRoot = null;
     const firstSeg = src.split('/')[0];
 
     // Cross-check the note's wiki area against the repo the anchor resolves
@@ -286,7 +305,9 @@ export function classifyAnchors(ctx, note) {
     }
 
     if (ctx.repoByName.has(firstSeg)) {
-      resolved = join(ctx.repoByName.get(firstSeg), src.split('/').slice(1).join('/'));
+      root = ctx.repoByName.get(firstSeg);
+      inRoot = src.split('/').slice(1).join('/');
+      resolved = join(root, inRoot);
     } else if (ctx.claimed.includes(firstSeg)) {
       // The vault claims this repo (a graphify/ mirror and/or a repos.json entry)
       // but no checkout of it resolved on this machine. The mirror and the
@@ -296,11 +317,17 @@ export function classifyAnchors(ctx, note) {
       continue;
     } else if (existsSync(join(ctx.vault, src))) {
       resolved = join(ctx.vault, src);
-      vaultLocal = true;
+      root = ctx.vault;
+      inRoot = src;
     } else {
       // try each covered repo as the implicit root
       for (const repo of ctx.covered) {
-        if (existsSync(join(ctx.reposDir, repo, src))) { resolved = join(ctx.reposDir, repo, src); break; }
+        if (existsSync(join(ctx.reposDir, repo, src))) {
+          root = join(ctx.reposDir, repo);
+          inRoot = src;
+          resolved = join(root, src);
+          break;
+        }
       }
     }
 
@@ -330,15 +357,15 @@ export function classifyAnchors(ctx, note) {
       continue;
     }
 
-    // A vault-local file git ignores (wiki-ingest's `chats/<repo>/<digest>.md`)
-    // exists only on the machine that wrote it — for every teammate who pulls
-    // the vault it is a dead path. "On my disk" is not "verified" (INNOV-304).
-    if (vaultLocal && gitIgnores(ctx.vault, src)) {
+    // A file git ignores — wiki-ingest's vault-local `chats/<repo>/<digest>.md`
+    // (INNOV-304), or a covered repo's build output or `.env` (INNOV-328) —
+    // exists only on the machine that wrote it; for every teammate who clones
+    // it is a dead path. "On my disk" is not "verified". A missing file stays
+    // broken even under an ignored dir: it is dead everywhere, this machine too.
+    if (!existsSync(resolved)) out.push({ state: 'broken', from: rel, source: src, repo: firstSeg, looked: resolved });
+    else if (gitIgnores(ctx.ignored, root, inRoot))
       out.push({ state: 'unresolvable', from: rel, source: src, repo: null, reason: 'gitignored' });
-      continue;
-    }
-    if (existsSync(resolved)) out.push({ state: 'verified', from: rel, source: src, repo: firstSeg, resolved });
-    else out.push({ state: 'broken', from: rel, source: src, repo: firstSeg, looked: resolved });
+    else out.push({ state: 'verified', from: rel, source: src, repo: firstSeg, resolved });
   }
 
   return out;
