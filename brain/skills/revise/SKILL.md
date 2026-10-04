@@ -69,13 +69,14 @@ Ask with `AskUserQuestion`, at most 4 questions per call:
 - **Line drift, one question for the group:** the `- ` / `+ ` lines of every proposed drift edit, options `Keep all` / `Skip all` (and "Other" to name notes to drop).
 - **Side claims, one question per note:** header the note name, question the `- ` / `+ ` lines and the evidence, options `Keep` / `Skip`. An "Other" answer is the person's own wording: it replaces `to` (re-run `--dry-run` on it and confirm once if it changed more than the sentence).
 
-Only the approved edits go into `$OK`, verbatim. Then apply:
+Only the approved edits go into `$OK`, verbatim. Copy each note first, so an edit can be undone without touching anything else in the file, then apply:
 
 ```bash
+PRE="$(mktemp -d)"; for n in <each note in $OK>; do mkdir -p "$PRE/$(dirname "$n")"; cp "$n" "$PRE/$n"; done
 node "${CLAUDE_PLUGIN_ROOT}/bin/revise.mjs" apply "$OK"
 ```
 
-It re-checks each note's blob, so a note that changed while the questions were open is `REFUSED`, not overwritten. For every `SOURCE-CHANGED` note, run `node "${CLAUDE_PLUGIN_ROOT}/bin/check-anchors.mjs" <note>` and revert that note's edit (`git checkout -- <note>`) if its anchor is not `verified`.
+It re-checks each note's blob, so a note that changed while the questions were open is `REFUSED`, not overwritten. It also refuses an edit that is not the note's own verify record (blob, evidence, drift pairs). For every `SOURCE-CHANGED` note, run `node "${CLAUDE_PLUGIN_ROOT}/bin/check-anchors.mjs" <note>`, and if its anchor is not `verified`, undo that edit by copying `"$PRE/<note>"` back. Never `git checkout -- <note>`: that also discards any other uncommitted change to the note.
 
 ### 5. Re-verify, then bump
 

@@ -265,6 +265,14 @@ git -C "$REPO" update-ref refs/remotes/origin/main "$SHA"
 node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));l.evidence.refs.push("other/lib/y.ts:3");console.log(JSON.stringify(l))' "$TMPROOT/e.jsonl" >"$TMPROOT/e2.jsonl"
 rv apply "$TMPROOT/e2.jsonl" --dry-run; rc=$?
 check "ref/multi-repo-evidence-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/range.md: evidence cites sm, other' "$TMPROOT/out.txt"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
+# Fresh, cited and valid is not enough: the edit must be the record's own.
+node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));l.evidence={...l.evidence,refs:["sm/other.ts:1"]};console.log(JSON.stringify(l))' "$TMPROOT/e.jsonl" >"$TMPROOT/e2.jsonl"
+rv apply "$TMPROOT/e2.jsonl" --dry-run; rc=$?
+check "bind/borrowed-evidence-refused" "$([[ $rc -ne 0 ]] && grep -q "^REFUSED wiki/range.md: edit does not match verify's record" "$TMPROOT/out.txt"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
+node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  console.log(JSON.stringify({...l,kind:"drift",drift:[{old:"lib/b.ts:62-70",new:"lib/b.ts:64-72"}]}))' "$TMPROOT/e.jsonl" >"$TMPROOT/e2.jsonl"
+rv apply "$TMPROOT/e2.jsonl" --dry-run; rc=$?
+check "bind/drift-not-the-records-refused" "$([[ $rc -ne 0 ]] && grep -q "^REFUSED wiki/range.md: edit does not match verify's record" "$TMPROOT/out.txt"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
 node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));delete l.evidence;console.log(JSON.stringify(l))' "$TMPROOT/e.jsonl" >"$TMPROOT/e2.jsonl"
 rv apply "$TMPROOT/e2.jsonl"; rc=$?
 check "ref/no-evidence-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/range.md: no evidence' "$TMPROOT/out.txt" && cmp -s "$VAULT/wiki/range.md" "$TMPROOT/range.before"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"

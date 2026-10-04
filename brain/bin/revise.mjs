@@ -31,7 +31,9 @@
 //   status-marked note, a draft, a path outside wiki/, and evidence whose
 //   cited files changed on the reference branch (evidence refs and drift paths
 //   differ between evidence.sha and origin/<evidence.branch> in the evidence's
-//   repo) or cannot be checked. Commits that touch other files do not count. Only the matched text
+//   repo) or cannot be checked. Commits that touch other files do not count.
+//   Last, the edit must be bound to the note's saved verify record: same blob,
+//   same evidence, and for a drift edit the same pairs. Only the matched text
 //   changes; line endings are untouched. Prints PROPOSED (with --dry-run) or
 //   APPLIED, `- `/`+ ` lines for each changed line, SOURCE-CHANGED when the
 //   source: line moved (run check-anchors.mjs on it), and REFUSED <note>: why.
@@ -100,6 +102,26 @@ function staleRef(ctx, ev, drift = []) {
   return changed ? `${changed.split('\n').join(', ')} changed on origin/${ev.branch} since verify judged it (${ev.sha}); re-derive` : null;
 }
 
+// verify's line-drift / side-claim records, the only evidence revise acts on.
+function loadRecords(vault) {
+  const file = join(vault, FINDINGS);
+  return (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : [])
+    .filter((r) => r.kind === 'claim' && r.verdict === 'cannot-tell' && SUBTYPES[r.subtype]);
+}
+
+// Why an edit is not backed by the note's saved verify record, or null: the
+// blob, the evidence and (for drift) the pairs must be the record's own, so an
+// edit cannot borrow fresh-looking evidence from elsewhere. A refused drift may
+// still be fixed as a claim edit on the same record.
+function unboundFrom(records, e) {
+  const r = records.find((x) => x.note === e.note);
+  const same = (a, b) => JSON.stringify(a ?? null) === JSON.stringify(b ?? null);
+  if (!r) return "no line-drift / side-claim record for this note in logs/verify-findings.json; run /brain:verify";
+  if (r.blob !== e.blob || !same(r.evidence, e.evidence) || (e.kind === 'drift' && !same(r.drift, e.drift)))
+    return "edit does not match verify's record for this note (blob, evidence or drift); re-derive and record";
+  return null;
+}
+
 // [start, end, replacement] spans for one drift pair, or a refusal string.
 function driftSpans(text, { old, new: neu }) {
   // Only path:line refs, so a drift pair can never rewrite status:, dates or prose.
@@ -159,9 +181,7 @@ function main(argv) {
 
   if (mode === 'queue') {
     const only = val('--note');
-    const file = join(vault, FINDINGS);
-    const records = (existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : [])
-      .filter((r) => r.kind === 'claim' && r.verdict === 'cannot-tell' && SUBTYPES[r.subtype] && (!only || r.note === only));
+    const records = loadRecords(vault).filter((r) => !only || r.note === only);
     if (only && !records.length) console.log(JSON.stringify({ note: only, norecord: true }));
     for (const r of records) {
       const line = { note: r.note, kind: SUBTYPES[r.subtype], subtype: r.subtype, reason: r.reason, blob: r.blob,
@@ -180,6 +200,7 @@ function main(argv) {
     let c;
     const ctx = () => (c ||= buildAnchorContext(vault));
     const lines = readFileSync(args[0], 'utf8').split(/\r?\n/).filter((l) => l.trim());
+    const records = loadRecords(vault);
     let done = 0;
     for (const l of lines) {
       let e;
@@ -193,6 +214,8 @@ function main(argv) {
       if (moved) { refuse(e.note, moved); continue; }
       const p = plan(text, e);
       if (p.refused) { refuse(e.note, p.refused); continue; }
+      const unbound = unboundFrom(records, e);
+      if (unbound) { refuse(e.note, unbound); continue; }
       if (!dry) writeFileSync(path, p.text);
       done++;
       console.log(`${dry ? 'PROPOSED' : 'APPLIED'} ${e.note}`);
