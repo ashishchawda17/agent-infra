@@ -55,11 +55,11 @@ A user/org-level list of known vaults at **`~/.claude/brain/registry.json`** (cr
 
    When init finishes — including when step 7 hands off to `/brain:save`, which opens and closes its own record — close yours: `BRAIN_ROOT=<vault> bash "${CLAUDE_PLUGIN_ROOT}/bin/session.sh" --end`. A lingering record only costs a spurious `SESSION: WARN` next time, but tidiness is cheap.
 
-1. **Ensure graphify is installed at the pinned version** (delegated — the brain does not vendor it, POC §16.1). **Pin** (`==0.8.46`) rather than floating latest: graphify's skill auto-runs `uv tool install --upgrade`, and on Windows a mid-upgrade venv rebuild can leave a reparse-point/locked file that breaks the launcher in a loop (see `/brain:doctor`). A fixed version means import stays healthy and the auto-upgrade never fires.
+1. **Ensure graphify is installed at the pinned version** (delegated — the brain does not vendor it, POC §16.1). **Pin** rather than floating latest: graphify's skill auto-runs `uv tool install --upgrade`, and on Windows a mid-upgrade venv rebuild can leave a reparse-point/locked file that breaks the launcher in a loop (see `/brain:doctor`). A fixed version means import stays healthy and the auto-upgrade never fires. The version and the wheel's sha256 are pinned once, in `bin/install-graphify.sh`, which refuses to install a wheel whose hash does not match (`uv tool install` itself checks no hash).
    ```bash
-   command -v graphify || uv tool install graphifyy==0.8.46
+   command -v graphify || bash "${CLAUDE_PLUGIN_ROOT}/bin/install-graphify.sh"
    ```
-   If `uv` is absent, tell the user to install it (or `pip install graphifyy==0.8.46`) and stop. If graphify is already installed at another version, leave it — **don't** force an upgrade here; `/brain:doctor` handles drift and repair.
+   If `uv` is absent, tell the user to install it and stop. If the script prints `sha256 mismatch`, stop and relay it verbatim: the downloaded wheel is not the pinned one, so do not fall back to an unchecked install. If graphify is already installed at another version, leave it — **don't** force an upgrade here; `/brain:doctor` handles drift and repair.
 
 1b. **Ensure the `/graphify` skill is registered with Claude Code — the CLI alone is not enough.** The CLI and the skill install separately: `uv tool install` gives you the binary, but the **skill** (which `/brain:save` hard-depends on for the keyless wiki concept-graph build) only exists after `graphify install --platform claude` registers it into `~/.claude/skills/graphify/`. A CLI-only machine is the known trap — init looks successful, then the first save silently can't refresh the wiki concept graph. Check and register:
    ```bash

@@ -17,7 +17,7 @@ error 4395`) and the launcher breaks — "points at a venv that no longer exists
 graphify.__main__` / "failed to canonicalize script path". The §6.1 grep fallback keeps the agent
 answering, but the graph's value is lost until repaired. This command finds and fixes that class.
 
-Resolve the vault as `$BRAIN_ROOT` (else cwd). **Pinned graphify version: `0.8.46`** (bump deliberately; keep in sync with `/brain:init`).
+Resolve the vault as `$BRAIN_ROOT` (else cwd). **Pinned graphify version: `0.8.46`**, with its wheel sha256, in `bin/install-graphify.sh` — the one place both `/brain:init` and R1 read; bump deliberately there.
 
 ## Checks — run all, print a ✅/⚠️/❌ table, then offer the matching repair per ❌
 
@@ -128,10 +128,10 @@ Resolve the vault as `$BRAIN_ROOT` (else cwd). **Pinned graphify version: `0.8.4
   uv tool uninstall graphifyy 2>/dev/null || true
   # Windows: if removal failed on a reparse point (os error 4395), force-clear the tool dir first:
   cmd //c "rmdir /s /q %APPDATA%\\uv\\tools\\graphifyy" 2>/dev/null || true
-  uv tool install graphifyy==0.8.46
+  bash "${CLAUDE_PLUGIN_ROOT}/bin/install-graphify.sh"   # pinned version, hash-checked
   graphify install --platform claude   # re-register the Claude skill at the CLI version
   ```
-  Then verify `graphify --version` runs cleanly and `uv tool install graphifyy --reinstall` completes with **no** reparse error (proves the venv is consistent).
+  Then verify `graphify --version` runs cleanly and `bash "${CLAUDE_PLUGIN_ROOT}/bin/install-graphify.sh" --reinstall` completes with **no** reparse error (proves the venv is consistent). A `sha256 mismatch` from the script means the downloaded wheel is not the pinned one: stop and relay it, never fall back to an unchecked `uv tool install`.
 - **R2 — skill missing or version mismatch.** `graphify install --platform claude` (registers/syncs the `~/.claude/skills/graphify/` skill to the CLI version). Non-destructive; if newly registered, the skill shows up after a session restart or `/reload-plugins`.
 - **R3 — registry path not OS-native.** Rewrite the offending `path` / `repos_dir` to OS-native absolute form (Windows `C:/...`), matching `.claude/settings.json`. (See the brain-init "Path handling" rule.)
 - **R4 — stale interpreter cache.** `rm <repo>/graphify-out/.graphify_python` — graphify re-resolves it on next use. Safe.

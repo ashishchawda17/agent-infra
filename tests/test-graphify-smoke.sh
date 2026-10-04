@@ -33,21 +33,28 @@ else
   bad "permissions must be exactly contents: read"
 fi
 
-# The pin must match the skills' pin, so the run proves the version users get.
-pin_of() { tr -d '\r' < "$1" | grep -o 'graphifyy==[0-9][0-9.]*' | sed 's/graphifyy==//' | sort -u; }
-init_pin=$(pin_of brain/skills/init/SKILL.md)
-doctor_pin=$(pin_of brain/skills/doctor/SKILL.md)
-wf_pin=$(pin_of "$WF")
-if [ -n "$wf_pin" ] && [ "$wf_pin" = "$init_pin" ] && [ "$wf_pin" = "$doctor_pin" ]; then
-  ok "graphify pin $wf_pin matches init and doctor"
+# The pin lives once, in install-graphify.sh (INNOV-358). The workflow and the
+# skills must install through it, so the run proves the version users get.
+pin=$(tr -d '\r' < brain/bin/install-graphify.sh | sed -n 's/^GRAPHIFY_VERSION=//p')
+if [ -n "$pin" ] && printf '%s\n' "$wf" | grep -q "GRAPHIFY_VERSION: '$pin'"; then
+  ok "version check expects $pin"
 else
-  bad "graphify pin drift: workflow='$wf_pin' init='$init_pin' doctor='$doctor_pin'"
+  bad "GRAPHIFY_VERSION must be '$pin' (from brain/bin/install-graphify.sh)"
 fi
-if printf '%s\n' "$wf" | grep -q "GRAPHIFY_VERSION: '$init_pin'"; then
-  ok "version check expects $init_pin"
+if printf '%s\n' "$wf" | grep -qE '^ +bash brain/bin/install-graphify\.sh *$' &&
+   ! printf '%s\n' "$wf" | grep -qE '(uv tool install|pip install).*graphifyy'; then
+  ok "workflow runs install-graphify.sh and installs graphifyy no other way"
 else
-  bad "GRAPHIFY_VERSION must be '$init_pin'"
+  bad "workflow must run 'bash brain/bin/install-graphify.sh' and never install graphifyy directly"
 fi
+for f in brain/skills/init/SKILL.md brain/skills/doctor/SKILL.md brain/README.md; do
+  t=$(tr -d '\r' < "$f")
+  if printf '%s\n' "$t" | grep -q 'install-graphify.sh' && ! printf '%s\n' "$t" | grep -q 'graphifyy=='; then
+    ok "$f installs through install-graphify.sh"
+  else
+    bad "$f must install via install-graphify.sh, not a bare graphifyy== pin"
+  fi
+done
 
 if printf '%s\n' "$wf" | grep -q 'PYTHONHASHSEED: .0.'; then
   ok "PYTHONHASHSEED pinned to 0"

@@ -16,7 +16,7 @@ jobs:
       run:
         shell: bash
     env:
-      # Keep in sync with brain/skills/init/SKILL.md and brain/skills/doctor/SKILL.md
+      # Keep in sync with brain/bin/install-graphify.sh
       # (tests/test-graphify-smoke.sh fails on drift).
       GRAPHIFY_VERSION: '0.8.46'
       PYTHONHASHSEED: '0'
@@ -37,7 +37,7 @@ jobs:
         run: |
           mkdir -p "$SMOKE"
           start=$(date +%s)
-          uv tool install graphifyy==0.8.46
+          bash brain/bin/install-graphify.sh
           echo "install_seconds=$(( $(date +%s) - start ))" >> "$SMOKE/timings.txt"
           uv tool dir --bin >> "$GITHUB_PATH"
 

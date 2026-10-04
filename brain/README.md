@@ -209,7 +209,7 @@ Once layer 1 is in place, a vault currently running "protected `main` + required
 ## Dependencies
 
 - **graphify CLI** — *delegated, not vendored* (POC §16.1 one-installer rule). `/brain:init`
-  ensures it via `uv tool install graphifyy==0.8.46` (**pinned** — see Troubleshooting).
+  ensures it via `bin/install-graphify.sh` (**pinned** by version and wheel sha256 — see Troubleshooting).
 - **graphify skill** — ships *inside* the graphify package, but registers separately:
   `graphify install --platform claude` puts it in `~/.claude/skills/graphify/`. `/brain:init`
   runs this too (and `/brain:doctor` checks it) — without it the CLI works but `/brain:save`
@@ -232,7 +232,7 @@ skill). Manual equivalent, from a single session with others closed:
 ```bash
 uv tool uninstall graphifyy 2>/dev/null || true
 cmd //c "rmdir /s /q %APPDATA%\\uv\\tools\\graphifyy" 2>/dev/null || true   # Windows: clear the stuck dir
-uv tool install graphifyy==0.8.46
+bash "<plugin root>/bin/install-graphify.sh"   # pinned version, hash-checked
 graphify install --platform claude
 ```
 Avoid by keeping graphify **pinned** (so its import stays healthy and the auto-upgrade never fires).
