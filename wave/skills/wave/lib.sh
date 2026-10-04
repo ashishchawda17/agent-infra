@@ -58,3 +58,43 @@ for r in json.load(sys.stdin)['result']['repos']:
     if os.path.normcase(os.path.realpath(r['path'])) == want: print(r['id']); break
 " "$(cygpath -m "$MAIN_CHECKOUT" 2>/dev/null || echo "$MAIN_CHECKOUT")"   # Windows python cannot read /c/...
 }
+
+# Keep a wave scratch file out of git and out of review diffs (review.sh diffs
+# untracked files too). Goes in the common dir's exclude, so every worktree sees it.
+wave_exclude() {  # $1 = gitignore pattern
+  local exclude
+  exclude="$(git rev-parse --git-common-dir)/info/exclude"
+  grep -qxF "$1" "$exclude" 2>/dev/null || echo "$1" >> "$exclude"
+}
+
+# True when $2 contains a line starting with marker $1 and nothing but bullets after
+# it, i.e. the reviewer finished. Shared by review.sh and plan-review.sh.
+verdict_ok() {  # $1 = marker, $2 = reviewer output
+  sed '/^[[:space:]]*$/d' <<< "$2" | awk -v marker="$1" '
+    index($0, marker) == 1 { seen = 1; ok = 1; next }
+    seen && !/^[-*] / { ok = 0 }
+    END { exit !(seen && ok) }'
+}
+
+# Hash of everything a reviewer could change in this worktree: index and tracked
+# edits plus untracked (non-excluded) file contents. wave_exclude'd scratch files
+# are deliberately outside it, so a reviewer's own log does not count as an edit.
+worktree_fingerprint() {
+  {
+    git status --porcelain=v1 -uall
+    git diff HEAD 2>/dev/null
+    git ls-files --others --exclude-standard -z | xargs -0 -r git hash-object --
+  } | git hash-object --stdin
+}
+
+# Reviewers are read-only. Codex and Claude are sandboxed by flags; Grok's CLI needs
+# bypassPermissions, so its read-only role is enforced here instead: run it and fail
+# with status 3 if the worktree changed underneath it.
+#   out="$(guard_readonly timeout 900 grok ... 2>"$ERR")"; rc=$?
+guard_readonly() {
+  local before rc
+  before="$(worktree_fingerprint)"
+  "$@"; rc=$?
+  [ "$before" = "$(worktree_fingerprint)" ] || return 3
+  return "$rc"
+}

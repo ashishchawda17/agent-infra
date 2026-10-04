@@ -136,6 +136,69 @@ out="$(cd "$BOX" && bash "$WAVE/triage.sh" ABC-1 2>&1)"; st=$?
 assert_eq "triage-jira-ids/exit-2" "2" "$st"
 assert_contains "triage-jira-ids/says-json" "$out" "--json"
 
+echo "--- 9. TIER sizes the review: normal is the default and keeps the loop ---"
+new_sandbox "$JIRA_CONFIG"
+st="$(spawn_dry)"
+out="$(cat "$BOX/out.txt")"
+assert_eq "tier-normal/exit-0" "0" "$st"
+assert_contains "tier-normal/header" "$out" "tier normal"
+assert_contains "tier-normal/loop" "$out" "Stop after 3 review rounds"
+assert_not_contains "tier-normal/no-plan" "$out" "plan-review.sh"
+assert_contains "tier-normal/tier-line" "$out" "Its first line is TIER: normal"
+
+echo "--- 10. TIER=quick runs one round and escalates on a risk trigger ---"
+st="$(spawn_dry TIER=quick)"
+out="$(cat "$BOX/out.txt")"
+assert_eq "tier-quick/exit-0" "0" "$st"
+assert_contains "tier-quick/one-round" "$out" "one Codex Terra correctness round, no loop"
+assert_contains "tier-quick/escalates" "$out" "TIER: quick -> normal"
+assert_not_contains "tier-quick/no-plan" "$out" "plan-review.sh"
+
+echo "--- 11. TIER=risk reviews the plan before code, then always adds Grok ---"
+st="$(spawn_dry TIER=risk)"
+out="$(cat "$BOX/out.txt")"
+assert_eq "tier-risk/exit-0" "0" "$st"
+plan_path="$(grep -o 'bash "[^"]*/plan-review.sh"' <<<"$out" | head -1 | sed 's/^bash "//; s/"$//')"
+if [[ -f "$plan_path" ]]; then pass "tier-risk/plan-review-exists"; else fail "tier-risk/plan-review-exists" "not a file: [$plan_path]"; fi
+assert_contains "tier-risk/plan-tiebreak" "$out" "tiebreak.sh\" --plan ABC-7"
+assert_contains "tier-risk/always-grok" "$out" "Tier risk: Codex Terra correctness plus Grok"
+plan_line="$(grep -n '^1.5 Tier risk' <<<"$out" | cut -d: -f1)"
+code_line="$(grep -n '^2. Work it' <<<"$out" | cut -d: -f1)"
+if [[ -n "$plan_line" && -n "$code_line" && "$plan_line" -lt "$code_line" ]]; then
+  pass "tier-risk/plan-before-code"
+else
+  fail "tier-risk/plan-before-code" "plan line [$plan_line], code line [$code_line]"
+fi
+
+echo "--- 12. an unknown TIER fails loudly ---"
+st="$(spawn_dry TIER=huge)"
+assert_eq "tier-bad/exit-1" "1" "$st"
+assert_contains "tier-bad/names-tiers" "$(cat "$BOX/out.txt")" "quick, normal, or risk"
+
+echo "--- 13. plan-review and tiebreak --plan refuse without their inputs ---"
+out="$(cd "$BOX" && bash "$WAVE/plan-review.sh" ABC-7 2>&1)"; st=$?
+assert_eq "plan-review-no-plan/exit-1" "1" "$st"
+assert_contains "plan-review-no-plan/says" "$out" "NO PLAN REVIEW"
+out="$(cd "$BOX" && bash "$WAVE/tiebreak.sh" --plan ABC-7 2>&1)"; st=$?
+assert_eq "tiebreak-plan-no-logs/exit-1" "1" "$st"
+assert_contains "tiebreak-plan-no-logs/says" "$out" "NO ASTRA TIE-BREAK: requires completed Codex, Grok, and plan logs"
+
+echo "--- 14. guard_readonly fails a reviewer that edits the worktree ---"
+printf 'tracked\n' >"$BOX/kept.txt"
+git -C "$BOX" add kept.txt && git -C "$BOX" commit -q -m kept
+guard() { (cd "$BOX" && . "$WAVE/lib.sh" && wave_exclude '.wave-review.*' && guard_readonly "$@"); echo $?; }
+assert_eq "guard/read-only-passes" "0" "$(guard grep -q tracked kept.txt)"
+assert_eq "guard/reviewer-status-kept" "7" "$(guard sh -c 'exit 7')"
+assert_eq "guard/edit-tracked" "3" "$(guard sh -c 'echo changed >> kept.txt')"
+git -C "$BOX" checkout -q -- kept.txt
+assert_eq "guard/new-untracked" "3" "$(guard sh -c 'echo x > stray.txt')"
+rm -f "$BOX/stray.txt"
+assert_eq "guard/own-log-is-not-an-edit" "0" "$(guard sh -c 'echo log > .wave-review.grok.log')"
+# negative control: an untracked file that already existed, edited in place
+printf 'a\n' >"$BOX/pre.txt"
+assert_eq "guard/edit-untracked" "3" "$(guard sh -c 'echo b >> pre.txt')"
+rm -f "$BOX/pre.txt"
+
 echo
 echo "$PASSED passed, $FAILED failed"
 [[ $FAILED -eq 0 ]]
