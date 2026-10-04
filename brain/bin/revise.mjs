@@ -29,8 +29,9 @@
 //   leading segment both sides share (the repo name). Every `old` must be cited,
 //   or the note is refused. Refused too: a blob that no longer matches, a
 //   status-marked note, a draft, a path outside wiki/, and evidence whose
-//   reference branch moved (origin/<evidence.branch> in the evidence's repo is
-//   no longer evidence.sha) or cannot be checked. Only the matched text
+//   cited files changed on the reference branch (evidence refs and drift paths
+//   differ between evidence.sha and origin/<evidence.branch> in the evidence's
+//   repo) or cannot be checked. Commits that touch other files do not count. Only the matched text
 //   changes; line endings are untouched. Prints PROPOSED (with --dry-run) or
 //   APPLIED, `- `/`+ ` lines for each changed line, SOURCE-CHANGED when the
 //   source: line moved (run check-anchors.mjs on it), and REFUSED <note>: why.
@@ -78,16 +79,23 @@ function guard(vault, note) {
 // Why the edit's evidence is not current on its reference branch, or null.
 // evidence = {refs: ["<repo>/path:line"], branch, sha}; the repo is the first
 // ref's first segment, resolved the way check-anchors.mjs resolves anchors.
-function staleRef(ctx, ev) {
+// Stale means a cited file changed between evidence.sha and origin/<branch>: the
+// evidence refs plus both sides of every drift pair. A commit elsewhere on the
+// branch does not count, or an active main would refuse every edit.
+function staleRef(ctx, ev, drift = []) {
   const repo = ev?.refs?.[0]?.split('/')[0];
   if (!repo || !ev.branch || !/^[0-9a-f]{7,40}$/.test(ev.sha || '')) return 'no evidence {refs, branch, sha} to check the reference branch against; re-derive';
   const dir = ctx().repoByName.get(repo);
   if (!dir) return `repo ${repo} is not checked out here; cannot check origin/${ev.branch}`;
-  let cur = '';
+  // ponytail: refs into another repo than the first one are not checked.
+  const path = (r) => r.replace(/:\d+(-\d+)?$/, '').replace(new RegExp(`^${esc(repo)}/`), '');
+  const files = [...new Set([...ev.refs.filter((r) => r.startsWith(`${repo}/`)), ...drift.flatMap((p) => [p?.old, p?.new])].filter((r) => typeof r === 'string').map(path))];
+  let changed;
   try {
-    cur = execFileSync('git', ['-C', dir, 'rev-parse', `origin/${ev.branch}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
-  } catch { return `origin/${ev.branch} not found in ${repo}`; }
-  return cur.startsWith(ev.sha) ? null : `origin/${ev.branch} moved since verify judged it (${ev.sha} → ${cur.slice(0, 7)}); re-derive`;
+    changed = execFileSync('git', ['-C', dir, 'diff', '--name-only', ev.sha, `origin/${ev.branch}`, '--', ...files],
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { return `cannot compare ${ev.sha} with origin/${ev.branch} in ${repo} (unfetched?); re-derive`; }
+  return changed ? `${changed.split('\n').join(', ')} changed on origin/${ev.branch} since verify judged it (${ev.sha}); re-derive` : null;
 }
 
 // [start, end, replacement] spans for one drift pair, or a refusal string.
@@ -179,7 +187,7 @@ function main(argv) {
       const path = join(vault, e.note);
       const text = readFileSync(path, 'utf8');
       if (blobOf(text) !== e.blob) { refuse(e.note, 'note changed since verify judged it; re-derive'); continue; }
-      const moved = staleRef(ctx, e.evidence);
+      const moved = staleRef(ctx, e.evidence, e.kind === 'drift' && Array.isArray(e.drift) ? e.drift : []);
       if (moved) { refuse(e.note, moved); continue; }
       const p = plan(text, e);
       if (p.refused) { refuse(e.note, p.refused); continue; }

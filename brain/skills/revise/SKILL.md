@@ -18,7 +18,7 @@ Resolve the vault root as `$BRAIN_ROOT` (else the current project dir / cwd).
 - **No edit without approval.** Line-drift edits may be approved as one group; every side-claim edit is approved per note.
 - **Smallest diff.** Only the wrong reference or sentence changes. Never restructure a note, never add a claim. `revise.mjs apply` enforces it: a drift edit rewrites only the cited `path:line` refs, and a claim edit replaces one exact single-line substring that occurs once in the body, never in frontmatter.
 - **Never touch `status:`, never raise `confidence` to `high`.** A note marked `superseded` or `falsified` is out of scope: its conclusion changed, which calls for a new note, not a patch. `revise.mjs` refuses it. A bump after a re-check that holds raises `low` to `medium`, exactly as `/brain:verify`'s `holds` row does; `high` stays a person's call.
-- **Never apply stale evidence.** A note changed since verify judged it, or a reference branch that moved since, is re-derived, not applied. `revise.mjs apply` enforces both: it refuses an edit whose `blob` is not the note's, or whose `evidence.sha` is not `origin/<evidence.branch>` in the evidence's repo (or cannot be checked there).
+- **Never apply stale evidence.** A note changed since verify judged it, or cited code that changed since, is re-derived, not applied. `revise.mjs apply` enforces both: it refuses an edit whose `blob` is not the note's, or whose cited files (the evidence refs and both sides of each drift pair) differ between `evidence.sha` and `origin/<evidence.branch>` in the evidence's repo, or cannot be compared there. Commits that touch other files do not count, so an active `main` does not void every verdict.
 - Never touch `wiki/_drafts/` (that is `/brain:promote`'s queue), never delete or archive a note.
 
 ## What to do when invoked
@@ -47,7 +47,7 @@ Each line is one could-not-tell record: `{note, kind: "drift"|"claim", subtype, 
 For every line, check the evidence is still current:
 
 - `stale: true` → the note changed since verify judged it.
-- `evidence.sha` differs from `git -C <checkout> rev-parse origin/<evidence.branch>` (after `git fetch`; the checkout comes from `resolve-repos.mjs --print-paths`) → the code moved since. `apply --dry-run` reports it as `REFUSED … moved`, so a preview is enough to find these.
+- a cited file changed between `evidence.sha` and `origin/<evidence.branch>` → the code moved since. `git fetch` the evidence's repo first (the checkout comes from `resolve-repos.mjs --print-paths`); `apply --dry-run` then reports it as `REFUSED … changed on origin/<branch>`, so a preview is enough to find these.
 
 Either way, do not use the stored `drift` or `reason`. Dispatch `/brain:verify`'s **claim** brief (its step 4, unchanged) for that note against the current reference branch, and use the fresh verdict: `holds` → `revise.mjs bump` it (step 5) and record it; another `line-drift` / `side-claim` → carry on with its new evidence and the note's current blob (`revise.mjs queue` prints it after `verify-findings.mjs record`); anything else → list it and leave it.
 

@@ -9,8 +9,8 @@
 #     byte-identical, CRLF kept: :620 is not :62, a range is refused, a ref
 #     cited with its repo prefix dropped still matches, a moved source: says so
 #   - apply (claim) replaces a `from` that occurs exactly once, nothing else
-#   - apply refuses a stale blob, evidence whose reference branch moved or
-#     has no sha, a status-marked note, a draft; --dry-run writes nothing
+#   - apply refuses a stale blob, evidence whose cited files changed on the
+#     reference branch (an unrelated commit does not count) or has no sha, a status-marked note, a draft; --dry-run writes nothing
 #   - bump sets last_verified to today, keeps CRLF and a trailing comment,
 #     raises low to medium (verify's holds row) and nothing else, refuses
 #     drafts and status-marked notes
@@ -131,7 +131,9 @@ EOF
 # origin/main at SHA.
 REPO="$TMPROOT/repos/sm"
 mkdir -p "$REPO"
-git -C "$REPO" init -q && git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m one
+gc() { git -C "$REPO" -c core.autocrlf=false -c user.name=t -c user.email=t@t "$@"; }
+git -C "$REPO" init -q && mkdir -p "$REPO/lib" && echo one >"$REPO/lib/x.ts" && echo one >"$REPO/lib/b.ts" \
+  && gc add -A && gc commit -q -m one
 SHA="$(git -C "$REPO" rev-parse HEAD)"
 git -C "$REPO" update-ref refs/remotes/origin/main "$SHA"
 export REPOS_DIR="$TMPROOT/repos"
@@ -235,13 +237,30 @@ printf '%s\n' '{"note":"wiki/_drafts/dr.md","kind":"claim","blob":"x","from":"Dr
 rv apply "$TMPROOT/e.jsonl"; rc=$?
 check "apply/draft-and-escape-refused" "$([[ $rc -ne 0 && "$(grep -c '^REFUSED' "$TMPROOT/out.txt")" == 2 ]] && grep -q '^Draft' "$VAULT/wiki/_drafts/dr.md"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
 
-# --- 4. reference branch: moved or unknown evidence is refused ------------------
+# --- 4. reference branch: only a change to the cited files invalidates evidence --
+# An active main moves daily; a commit that does not touch the cited files must
+# not force a re-derive, or the mechanical drift path never applies anything.
 cp "$VAULT/wiki/range.md" "$TMPROOT/range.before"
 claim wiki/range.md 'See lib/b.ts:62-70 for the loop.' 'See lib/b.ts:64-72 for the loop.'
-git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m two
+echo other >"$REPO/other.ts" && gc add -A && gc commit -q -m unrelated
+git -C "$REPO" update-ref refs/remotes/origin/main HEAD
+rv apply "$TMPROOT/e.jsonl" --dry-run; rc=$?
+check "ref/unrelated-commit-still-applies" "$([[ $rc -eq 0 ]] && grep -q '^PROPOSED wiki/range.md' "$TMPROOT/out.txt"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
+echo two >"$REPO/lib/x.ts" && gc commit -q -am cited
 git -C "$REPO" update-ref refs/remotes/origin/main HEAD
 rv apply "$TMPROOT/e.jsonl"; rc=$?
-check "ref/moved-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/range.md: origin/main moved' "$TMPROOT/out.txt" && cmp -s "$VAULT/wiki/range.md" "$TMPROOT/range.before"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
+check "ref/cited-file-changed-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/range.md: lib/x.ts changed on origin/main' "$TMPROOT/out.txt" && cmp -s "$VAULT/wiki/range.md" "$TMPROOT/range.before"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
+git -C "$REPO" update-ref refs/remotes/origin/main "$SHA"
+# A drift target counts as cited: the new line must still be where verify saw it.
+node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
+  console.log(JSON.stringify({...l,kind:"drift",drift:[{old:"lib/b.ts:62-70",new:"lib/b.ts:64-72"}]}))' "$TMPROOT/e.jsonl" >"$TMPROOT/e3.jsonl"
+gc checkout -q -b side "$SHA" && echo two >"$REPO/lib/b.ts" && gc commit -q -am target
+git -C "$REPO" update-ref refs/remotes/origin/main HEAD
+rv apply "$TMPROOT/e3.jsonl" --dry-run; rc=$?
+check "ref/drift-target-changed-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/range.md: lib/b.ts changed on origin/main' "$TMPROOT/out.txt"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
+node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));l.evidence.sha="0123456789abcdef";console.log(JSON.stringify(l))' "$TMPROOT/e.jsonl" >"$TMPROOT/e2.jsonl"
+rv apply "$TMPROOT/e2.jsonl" --dry-run; rc=$?
+check "ref/unknown-sha-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/range.md: cannot compare' "$TMPROOT/out.txt"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
 git -C "$REPO" update-ref refs/remotes/origin/main "$SHA"
 node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));delete l.evidence;console.log(JSON.stringify(l))' "$TMPROOT/e.jsonl" >"$TMPROOT/e2.jsonl"
 rv apply "$TMPROOT/e2.jsonl"; rc=$?
