@@ -87,7 +87,9 @@ function staleRef(ctx, ev, drift = []) {
   if (!repo || !ev.branch || !/^[0-9a-f]{7,40}$/.test(ev.sha || '')) return 'no evidence {refs, branch, sha} to check the reference branch against; re-derive';
   const dir = ctx().repoByName.get(repo);
   if (!dir) return `repo ${repo} is not checked out here; cannot check origin/${ev.branch}`;
-  // ponytail: refs into another repo than the first one are not checked.
+  // One sha belongs to one repo, so evidence citing several cannot be checked.
+  const others = [...new Set(ev.refs.map((r) => r.split('/')[0]).filter((r) => r !== repo))];
+  if (others.length) return `evidence cites ${[repo, ...others].join(', ')} but carries one sha; re-derive`;
   const path = (r) => r.replace(/:\d+(-\d+)?$/, '').replace(new RegExp(`^${esc(repo)}/`), '');
   const files = [...new Set([...ev.refs.filter((r) => r.startsWith(`${repo}/`)), ...drift.flatMap((p) => [p?.old, p?.new])].filter((r) => typeof r === 'string').map(path))];
   let changed;

@@ -262,6 +262,9 @@ node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));
 rv apply "$TMPROOT/e2.jsonl" --dry-run; rc=$?
 check "ref/unknown-sha-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/range.md: cannot compare' "$TMPROOT/out.txt"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
 git -C "$REPO" update-ref refs/remotes/origin/main "$SHA"
+node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));l.evidence.refs.push("other/lib/y.ts:3");console.log(JSON.stringify(l))' "$TMPROOT/e.jsonl" >"$TMPROOT/e2.jsonl"
+rv apply "$TMPROOT/e2.jsonl" --dry-run; rc=$?
+check "ref/multi-repo-evidence-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/range.md: evidence cites sm, other' "$TMPROOT/out.txt"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
 node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));delete l.evidence;console.log(JSON.stringify(l))' "$TMPROOT/e.jsonl" >"$TMPROOT/e2.jsonl"
 rv apply "$TMPROOT/e2.jsonl"; rc=$?
 check "ref/no-evidence-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/range.md: no evidence' "$TMPROOT/out.txt" && cmp -s "$VAULT/wiki/range.md" "$TMPROOT/range.before"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
