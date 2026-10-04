@@ -15,7 +15,7 @@ Companion to `/brain:freshness` and `/brain:tidy`. Freshness produces the queue;
 Resolve the vault root as `$BRAIN_ROOT` (else the current project dir / cwd).
 
 **Hard limits. Never cross these, whatever a subagent concludes:**
-- **Never rewrite a fact.** A claim the code contradicts gets a `status:` and a one-line reason. Its body is not edited. If the body should change, that is a draft for `/brain:promote`, not an edit here.
+- **Never rewrite a fact.** A claim the code contradicts gets a `status:` and a one-line reason. Its body is not edited. If the body should change, that is a draft for `/brain:promote`, not an edit here. A `line-drift` or `side-claim` could-not-tell is `/brain:revise`'s input: it turns the recorded evidence into body edits a person approves.
 - **Never invent an anchor.** A note whose `source:` does not resolve to a file on this machine is skipped and listed. Do not guess a path, and do not re-anchor it (moved anchors are `/brain:tidy`'s job).
 - **Never raise `confidence` to `high`.** Verification raises `low` to `medium` at most. `high` is a person's call (see `/brain:promote`).
 - **Never delete or archive a note**, and never touch `wiki/_drafts/` notes' `last_verified` or `confidence`. Drafts are `/brain:promote`'s queue.
@@ -95,7 +95,7 @@ Show the full plan compactly as the four-part table (step 6's format) plus block
 | `holds`, note has `confidence: medium`/`high` | `last_verified:` → today (`date +%F`) | body, `confidence`, `status` |
 | `holds`, note has `confidence: low` | `confidence: low` → `medium`, and `last_verified:` → today | body, `status` |
 | `superseded` / `falsified` | add or set `status: <verdict>`. Insert **one line** immediately after the closing `---`: `> **Status (<today>, /brain:verify):** <verdict>: <reason>` | `last_verified` (**not** bumped: the note was not confirmed), `confidence`, the rest of the body |
-| `cannot-tell` | none. List it | everything |
+| `cannot-tell` | none. List it (`line-drift` and `side-claim` are `/brain:revise`'s queue) | everything |
 | dead link `found` | rewrite `[[<target>` → `[[<replacement>` in that note (keep any `\|alias` / `#heading`) | everything else |
 | dead link `draft` | none. List it as "target exists only as draft `<replacement>`; promote it first". A trusted note never links staging | everything |
 | dead link `none` | none. List it | everything |
