@@ -199,9 +199,42 @@ if [[ ${#DELETED[@]} -gt 0 ]]; then
 fi
 if [[ ${#KEPT[@]} -gt 0 ]]; then
   echo "  KEPT — 'git branch -d' refused them, so the work is intact:"
-  printf '    %s\n' "${KEPT[@]}"
+  # One line per kept branch, so unmerged work is a finding rather than a name in a
+  # list (INNOV-309: two kept branches in one vault held 9 trusted notes and a log
+  # that had reached main by no other route, and nothing ever said so). "Absent"
+  # means a path the branch changed does not exist on the default branch at all.
+  # One absent path is enough to flag: the real case added new notes AND edited
+  # wiki/index.md, which exists, so "all absent" would have missed it.
+  for branch in "${KEPT[@]}"; do
+    ahead="$(git -C "$VAULT" rev-list --count "$DEFAULT..$branch" 2>/dev/null || echo 0)"
+    behind_b="$(git -C "$VAULT" rev-list --count "$branch..$DEFAULT" 2>/dev/null || echo 0)"
+    total=0
+    absent=0
+    # quotepath=off: a quoted non-ASCII name would never match and read as absent.
+    while IFS= read -r path; do
+      [[ -n "$path" ]] || continue
+      total=$((total + 1))
+      git -C "$VAULT" cat-file -e "$DEFAULT:$path" 2>/dev/null || absent=$((absent + 1))
+    done < <(git -C "$VAULT" -c core.quotepath=off diff --name-only "$DEFAULT...$branch" 2>/dev/null)
+    if [[ $total -eq 0 ]]; then
+      paths="no changed paths"
+    elif [[ $absent -eq 0 ]]; then
+      paths="paths present on $DEFAULT"
+    else
+      paths="paths absent from $DEFAULT ($absent of $total)"
+    fi
+    line="    $branch: ${ahead//[^0-9]/} unmerged commit(s), ${behind_b//[^0-9]/} behind $DEFAULT, $paths"
+    if [[ "$branch" == "$SWITCHED_FROM" ]]; then
+      # This save's own branch is normally kept: its commit has not landed yet, and
+      # its new log is always absent. Tagged, not flagged, or every save cries wolf.
+      line="$line (this save's branch, not landed yet)"
+    elif [[ $absent -gt 0 ]]; then
+      line="$line — POSSIBLE LOST WORK: it reached '$DEFAULT' by no other route"
+    fi
+    echo "$line"
+  done
   echo "  Usually that means the branch is not fully merged yet; it also covers a"
   echo "  branch checked out in another worktree, which git will not delete either."
-  echo "  Nothing on those branches has been lost. They land the usual way (a PR, or [[promote]])."
+  echo "  Nothing was deleted from those branches. They land the usual way (a PR, or [[promote]])."
 fi
 exit 0

@@ -286,6 +286,70 @@ err="$(cat "$BOX/err.txt")"
 assert_eq "unknown-flag/exit-1" "1" "$status"
 assert_contains "unknown-flag/refused-line" "$err" "REAP: REFUSED - unknown argument"
 
+# ================== kept-branch report: work that reached main by no route ===
+# The real instance: a branch that ADDS notes absent from main and EDITS a file
+# main has (the 9 hub notes + wiki/index.md). It must be flagged even though not
+# every path is absent. main then moves on, so "behind" is non-zero.
+new_vault
+git -C "$VAULT" checkout -q -b "brain/promote-hub" main
+printf 'hub note\n' >"$VAULT/wiki/hub-a.md"
+printf 'edit\n' >>"$VAULT/wiki/hot.md"
+git -C "$VAULT" add -A >/dev/null 2>&1
+git -C "$VAULT" commit -q -m "hub notes" >/dev/null 2>&1
+git -C "$VAULT" checkout -q main
+merged_branch "brain/save-2026-09-01"
+git -C "$VAULT" checkout -q main
+
+status="$(run_reap)"
+out="$(cat "$BOX/out.txt")"
+assert_eq "report-absent/exit-0" "0" "$status"
+assert_contains "report-absent/ok-line-unchanged" "$(head -n 1 "$BOX/out.txt")" "REAP: OK - on 'main'"
+assert_contains "report-absent/line" "$out" \
+  "brain/promote-hub: 1 unmerged commit(s), 1 behind main, paths absent from main (1 of 2) — POSSIBLE LOST WORK"
+
+# Negative control: a kept branch whose only path exists on main is reported, but
+# is NOT called lost work. Fails if the flag fires on every kept branch.
+new_vault
+unmerged_branch "brain/save-2026-09-09"
+status="$(run_reap)"
+out="$(cat "$BOX/out.txt")"
+assert_eq "report-present/exit-0" "0" "$status"
+assert_contains "report-present/line" "$out" \
+  "brain/save-2026-09-09: 1 unmerged commit(s), 0 behind main, paths present on main"
+case "$out" in
+  *"POSSIBLE LOST WORK"*) fail "report-present/not-flagged" "flagged a branch whose paths are all on main" "$out" ;;
+  *) pass "report-present/not-flagged" ;;
+esac
+
+# This save's own branch is normally kept with a new, absent log: tagged, not
+# flagged, or every save would cry wolf.
+new_vault
+git -C "$VAULT" checkout -q -b "brain/save-2026-09-13" main
+printf 'session\n' >"$VAULT/logs/2026-09-13.md"
+git -C "$VAULT" add -A >/dev/null 2>&1
+git -C "$VAULT" commit -q -m "save" >/dev/null 2>&1
+status="$(run_reap)"
+out="$(cat "$BOX/out.txt")"
+assert_eq "report-own/exit-0" "0" "$status"
+assert_contains "report-own/tagged" "$out" \
+  "brain/save-2026-09-13: 1 unmerged commit(s), 0 behind main, paths absent from main (1 of 1) (this save's branch, not landed yet)"
+case "$out" in
+  *"POSSIBLE LOST WORK"*) fail "report-own/not-flagged" "flagged this save's own branch" "$out" ;;
+  *) pass "report-own/not-flagged" ;;
+esac
+
+# No kept branches => no report lines.
+new_vault
+merged_branch "brain/save-2026-09-01"
+git -C "$VAULT" checkout -q main
+status="$(run_reap)"
+out="$(cat "$BOX/out.txt")"
+assert_eq "report-none/exit-0" "0" "$status"
+case "$out" in
+  *"unmerged commit"*|*KEPT*) fail "report-none/no-lines" "report lines with nothing kept" "$out" ;;
+  *) pass "report-none/no-lines" ;;
+esac
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"
