@@ -49,3 +49,16 @@ test('vault template matches the reminder (INNOV-356)', () => {
   assert.ok(tpl.indexOf('graphify affected') >= 0 && tpl.indexOf('graphify affected') < tpl.indexOf('graphify query'));
   assert.match(tpl, /## What the graph does not see[\s\S]*XML[\s\S]*field[\s\S]*language/);
 });
+test('init offers the INNOV-356 graph wording to vaults that predate it (INNOV-368)', () => {
+  const read = p => readFileSync(fileURLToPath(new URL(p, import.meta.url)), 'utf8').replace(/\r/g, '');
+  const tpl = read('../brain/templates/CLAUDE.brain.md');
+  const init = read('../brain/skills/init/SKILL.md');
+  const heading = '## What the graph does not see';
+  // init keys its check on a heading the template must still carry verbatim
+  assert.ok(tpl.split('\n').includes(heading), `template lost "${heading}"`);
+  const offer = init.split('\n').find(l => l.includes('does **not** have a `' + heading + '`'));
+  assert.ok(offer, 'init must offer the section to a CLAUDE.md lacking the heading');
+  assert.match(offer, /Staleness rule/);
+  assert.match(offer, /How to query the graph/);
+  assert.match(offer, /ask first/);
+});
