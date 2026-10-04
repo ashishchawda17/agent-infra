@@ -5,8 +5,8 @@
 #   After a save has committed, leave the checkout on the default branch and
 #   delete the brain/* branches whose work has already landed.
 #     - merged brain/* branches are deleted; the checkout ends on the default
-#     - an UNMERGED branch is NEVER deleted: `git branch -d` refuses, the script
-#       reports it under KEPT, and the commits are still reachable afterwards
+#     - an UNMERGED branch is NEVER deleted, even when pushed with -u (INNOV-379):
+#       the script reports it under KEPT, and the commits are still reachable
 #     - branches outside the brain/* namespace are never touched
 #     - the default branch fast-forwards to origin/<default> when it is behind,
 #       and a DIVERGED default is reported, never merged
@@ -350,6 +350,70 @@ case "$out" in
   *"unmerged commit"*|*KEPT*) fail "report-none/no-lines" "report lines with nothing kept" "$out" ;;
   *) pass "report-none/no-lines" ;;
 esac
+
+# =========================== pushed with -u but unmerged survives (INNOV-379) =
+# The real instance: the save branch was pushed with `push -u` and a PR opened,
+# then the reap deleted it. With an upstream set, `git branch -d` checks merged-ness
+# against origin/<branch>, which equals the branch right after a push, so -d alone
+# deletes unmerged work. The script must check against the default branch itself.
+new_vault
+git -C "$VAULT" checkout -q -b "brain/save-2026-10-04" main
+printf 'session\n' >"$VAULT/logs/2026-10-04.md"
+git -C "$VAULT" add -A >/dev/null 2>&1
+git -C "$VAULT" commit -q -m "save" >/dev/null 2>&1
+git -C "$VAULT" push -q -u origin "brain/save-2026-10-04" >/dev/null 2>&1
+pushed_sha="$(git -C "$VAULT" rev-parse HEAD)"
+
+# Negative control: the fixture really is the bug shape. Plain `git branch -d`, the
+# only guard the script had before INNOV-379, deletes this unmerged branch.
+cp -R "$VAULT" "$BOX/control"
+git -C "$BOX/control" checkout -q main
+if git -C "$BOX/control" branch -d "brain/save-2026-10-04" >/dev/null 2>&1; then
+  pass "pushed/control-plain-d-deletes-it"
+else
+  fail "pushed/control-plain-d-deletes-it" "git branch -d refused; the fixture does not reproduce the bug"
+fi
+
+# A stub gh on PATH answers the open-PR lookup; the fixture remote is a local path,
+# so a real gh could not.
+mkdir -p "$BOX/stubbin"
+cat >"$BOX/stubbin/gh" <<'EOF'
+#!/usr/bin/env bash
+[[ "$1 $2" == "pr list" ]] && echo "https://github.com/example/vault/pull/166"
+exit 0
+EOF
+chmod +x "$BOX/stubbin/gh"
+status="$(PATH="$BOX/stubbin:$PATH" run_reap)"
+out="$(cat "$BOX/out.txt")"
+assert_eq "pushed/exit-0" "0" "$status"
+if branch_exists "brain/save-2026-10-04"; then
+  pass "pushed/branch-survives"
+else
+  fail "pushed/branch-survives" "A PUSHED-BUT-UNMERGED BRANCH WAS DELETED" "$out"
+fi
+assert_eq "pushed/commit-still-reachable" \
+  "$pushed_sha" "$(git -C "$VAULT" rev-parse "brain/save-2026-10-04" 2>/dev/null)"
+assert_contains "pushed/reported-kept" "$out" "kept 1 unmerged"
+assert_contains "pushed/pr-note" "$out" \
+  "pushed to origin/brain/save-2026-10-04, open PR https://github.com/example/vault/pull/166"
+
+# A pushed branch that HAS landed on main is still drained: the new check must not
+# turn every pushed branch into litter.
+new_vault
+git -C "$VAULT" checkout -q -b "brain/save-2026-10-05" main
+printf 'landed\n' >>"$VAULT/logs/x.md"
+git -C "$VAULT" commit -q -am "landed" >/dev/null 2>&1
+git -C "$VAULT" push -q -u origin "brain/save-2026-10-05" >/dev/null 2>&1
+git -C "$VAULT" checkout -q main
+git -C "$VAULT" merge -q --no-edit "brain/save-2026-10-05" >/dev/null 2>&1
+status="$(run_reap)"
+out="$(cat "$BOX/out.txt")"
+assert_eq "pushed-merged/exit-0" "0" "$status"
+if branch_exists "brain/save-2026-10-05"; then
+  fail "pushed-merged/drained" "a pushed branch already merged into main survived" "$out"
+else
+  pass "pushed-merged/drained"
+fi
 
 # ================================================================= SUMMARY ==
 echo
