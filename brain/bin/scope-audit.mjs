@@ -348,8 +348,10 @@ function vaultCarveOut() {
       // no vault-side carve-out: nothing is carved
     }
     for (const line of text.split(/\r?\n/)) {
-      const raw = line.trim();
+      let raw = line.trim();
       if (!raw || raw.startsWith('#') || raw.startsWith('!')) continue;
+      // graphify's _parse_gitignore_line: drop an inline ` # comment`, unescape \#.
+      raw = raw.replace(/\s+#+[^\\].*$/, '').replace(/\\#/g, '#').trim();
       const p = raw.replace(/^\/+/, '').replace(/\/+$/, '');
       if (p) rules.push({ re: fnmatchRe(p), anchored: raw.startsWith('/') });
     }

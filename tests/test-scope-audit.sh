@@ -499,6 +499,13 @@ assert_eq "glob-carve-out/caret-is-literal-in-class" "0" "$status" "output: [$(a
 status="$(run_gl 'migrations/[!a]*.js\nmigrations/versions/\n*.Tests/\n')"
 assert_eq "glob-carve-out/bang-negates-class" "0" "$status" "output: [$(audit_all)]"
 
+# graphify strips an inline ` # comment` (whitespace before the #), so the audit
+# must too, or a commented carve-out matches nothing and refuses a correct graph.
+status="$(run_gl 'migrations/*.js  # legacy knex\nmigrations/versions/ # alembic\n*.Tests/\n')"
+assert_eq "glob-carve-out/inline-comment-stripped" "0" "$status" "output: [$(audit_all)]"
+status="$(run_gl 'migrations/*.js  # legacy knex\r\nmigrations/versions/ # alembic\r\n*.Tests/\r\n')"
+assert_eq "glob-carve-out/inline-comment-stripped-crlf" "0" "$status" "output: [$(audit_all)]"
+
 echo "--- E. SKIPPED is never OK ---"
 
 # 1. no --repo-root => direction (b) never ran. Clean (a) is NOT an OK.
