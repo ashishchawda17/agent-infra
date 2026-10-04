@@ -28,7 +28,8 @@
 
 # Prints the vault repo's default branch name, or nothing when it cannot be
 # determined. Tried in order, first hit wins:
-#   (a) the local origin/HEAD symbolic ref (works offline, no gh needed),
+#   (a) the local origin/HEAD symbolic ref (works offline, no gh needed;
+#       check-freshness.sh re-reads it from origin on every save, INNOV-352),
 #   (b) `gh repo view --json defaultBranchRef` when gh exists and is authed.
 # EVERY method degrades silently to "unknown" — an error, a missing tool or a
 # vault with no remote must never be reported as a branch name. The literal
