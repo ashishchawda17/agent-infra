@@ -19,6 +19,7 @@ printf '%s\n' "$*" >> "$UV_LOG"
 EOF
 chmod +x "$tmp/bin/uv"
 export UV_LOG="$tmp/uv.log"
+export BRAIN_HOME="$tmp/brain-home"
 
 run() { PATH="$tmp/bin:$PATH" bash "$SCRIPT" "$@" > "$tmp/out" 2>&1; }
 # file:// URL curl can open; Windows curl needs the drive-letter path.
@@ -42,6 +43,11 @@ if [ -s "$UV_LOG" ]; then
 else
   ok "uv not called on a wrong hash"
 fi
+if ls "$BRAIN_HOME/wheels/"*.whl > /dev/null 2>&1; then
+  bad "a wheel with the wrong hash was kept in $BRAIN_HOME/wheels"
+else
+  ok "wrong-hash wheel not kept"
+fi
 
 # A failed download is refused too, not installed from whatever is there.
 : > "$UV_LOG"
@@ -52,7 +58,9 @@ else
 fi
 
 # Positive control: the real wheel from PyPI matches the committed hash, and
-# uv is handed the local wheel file plus any pass-through args.
+# uv is handed the local wheel file plus any pass-through args. The wheel must
+# outlive the script: uv records its path in the tool receipt, and
+# `uv tool upgrade` fails on a path that is gone.
 : > "$UV_LOG"
 if ! curl -fsSI https://pypi.org/simple/graphifyy/ > /dev/null 2>&1; then
   echo "SKIP PyPI unreachable: real-wheel hash not checked"
@@ -62,6 +70,16 @@ elif run --reinstall; then
     "tool install "*graphifyy-*-py3-none-any.whl" --reinstall") ok "pinned hash matches PyPI; uv gets the local wheel" ;;
     *) bad "unexpected uv args: '$args'" ;;
   esac
+  whl=${args#tool install }; whl=${whl% --reinstall}
+  case "$whl" in
+    "$BRAIN_HOME"/wheels/*) ;;
+    *) bad "wheel not under \$BRAIN_HOME/wheels: $whl" ;;
+  esac
+  if [ -f "$whl" ]; then
+    ok "installed wheel kept for the uv receipt"
+  else
+    bad "installed wheel $whl is gone after the script exits"
+  fi
 else
   bad "real wheel refused: $(cat "$tmp/out")"
 fi

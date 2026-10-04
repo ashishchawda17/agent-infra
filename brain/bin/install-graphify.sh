@@ -6,7 +6,9 @@
 # `uv tool install` ignores --hash in constraints and --with-requirements files
 # (verified on uv 0.11.17: a wrong hash installs), so download the wheel, check
 # its sha256 here, and hand uv the local file. Extra args pass through to uv
-# (e.g. --reinstall).
+# (e.g. --reinstall). The verified wheel is kept in $BRAIN_HOME/wheels
+# (default ~/.brain): uv records its path in the tool receipt, so a temp path
+# would leave `uv tool upgrade` failing on a file that is gone.
 # ponytail: only the graphifyy wheel is hash-pinned; uv resolves its ~29
 # dependencies (numpy, tree-sitter-*) from the index unhashed. Hashing the
 # whole closure needs per-platform wheel hashes and an install path other than
@@ -18,8 +20,10 @@ GRAPHIFY_SHA256=e2ee72fb84ac8d5eb1fcf6f4421c9e1b7b50e7208b07b89d181d220c321a1e6e
 
 wheel="graphifyy-${GRAPHIFY_VERSION}-py3-none-any.whl"
 url=${GRAPHIFY_WHEEL_URL:-https://files.pythonhosted.org/packages/py3/g/graphifyy/$wheel}
+dest="${BRAIN_HOME:-$HOME/.brain}/wheels"
 
-tmp=$(mktemp -d)
+mkdir -p "$dest"
+tmp=$(mktemp -d "$dest/.download.XXXXXX")
 trap 'rm -rf "$tmp"' EXIT
 
 if ! curl -fsSL "$url" -o "$tmp/$wheel"; then
@@ -41,4 +45,5 @@ if [ "$actual" != "$GRAPHIFY_SHA256" ]; then
   exit 1
 fi
 
-uv tool install "$tmp/$wheel" "$@"
+mv -f "$tmp/$wheel" "$dest/$wheel"
+uv tool install "$dest/$wheel" "$@"

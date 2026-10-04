@@ -40,7 +40,13 @@ if [ -n "$pin" ] && printf '%s\n' "$wf" | grep -q "GRAPHIFY_VERSION: '$pin'"; th
 else
   bad "GRAPHIFY_VERSION must be '$pin' (from brain/bin/install-graphify.sh)"
 fi
-for f in "$WF" brain/skills/init/SKILL.md brain/skills/doctor/SKILL.md brain/README.md; do
+if printf '%s\n' "$wf" | grep -qE '^ +bash brain/bin/install-graphify\.sh *$' &&
+   ! printf '%s\n' "$wf" | grep -qE '(uv tool install|pip install).*graphifyy'; then
+  ok "workflow runs install-graphify.sh and installs graphifyy no other way"
+else
+  bad "workflow must run 'bash brain/bin/install-graphify.sh' and never install graphifyy directly"
+fi
+for f in brain/skills/init/SKILL.md brain/skills/doctor/SKILL.md brain/README.md; do
   t=$(tr -d '\r' < "$f")
   if printf '%s\n' "$t" | grep -q 'install-graphify.sh' && ! printf '%s\n' "$t" | grep -q 'graphifyy=='; then
     ok "$f installs through install-graphify.sh"
