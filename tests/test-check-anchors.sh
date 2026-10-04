@@ -482,6 +482,35 @@ run_check
 assert_eq "enum/no-source-still-exit-1" "1" "$STATUS" "$(evidence)"
 assert_out_has "enum/no-source-named" 'wiki/_drafts/bare.md — `status: trusted`' "$(evidence)"
 
+# --- 14. a checkout's FOLDER name gets its repo's remote (INNOV-376) ------
+# The REPOS_DIR fallback scan registers every folder by name. A folder name
+# had no remote, so an anchor written with it skipped the wrong-repo cross-check
+# and verified: same file, same checkout, opposite verdict to the repos.json name.
+echo "--- 14. folder-name anchor, wrong area ---"
+sb_new
+mv "$REPOS/demo" "$REPOS/demo-clone"
+printf '{\n  "repos": {\n    "demo": { "remote": "%s" },\n    "other": { "remote": "https://example.invalid/acme/other.git" }\n  }\n}\n' "$REMOTE" >"$VAULT/repos.json"
+mkdir -p "$VAULT/wiki/other" "$VAULT/wiki/demo"
+mkarea() { # area name source
+  printf -- '---\nid: %s\nsource: %s\n---\n# %s\n' "$2" "$3" "$2" >"$VAULT/wiki/$1/$2.md"
+}
+mkarea other byname "demo/src/a.js"
+run_check "wiki/other/byname.md"
+assert_eq "folder-name/baseline-repo-name-mismatch" "1" "$STATUS" "$(evidence)"
+mkarea other byfolder "demo-clone/src/a.js"
+run_check "wiki/other/byfolder.md"
+assert_eq "folder-name/wrong-area-exit-1" "1" "$STATUS" \
+  "a folder-name anchor into another area's repo is a false green" "$(evidence)"
+assert_out_has "folder-name/wrong-area-counts" "0 verified, 1 broken" "$(evidence)"
+# CRLF variant of the same note.
+sed -i 's/$/\r/' "$VAULT/wiki/other/byfolder.md"
+run_check "wiki/other/byfolder.md"
+assert_eq "folder-name/crlf-wrong-area-exit-1" "1" "$STATUS" "$(evidence)"
+# Positive control: the folder name in its OWN area still verifies.
+mkarea demo own "demo-clone/src/a.js"
+run_check "wiki/demo/own.md"
+assert_eq "folder-name/own-area-exit-0" "0" "$STATUS" "$(evidence)"
+
 # ============================================ promote never writes status: ==
 # INNOV-334: promote runs wrote `status: trusted` into 14 notes. `status:` is
 # reserved for current|superseded|falsified (INNOV-294) and freshness flags
