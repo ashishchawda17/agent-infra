@@ -39,7 +39,7 @@
 // Pure Node, no deps. Read-only: nothing here writes, commits, or fetches.
 
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { resolveRepos, normalizeRemote } from './resolve-repos.mjs';
 
@@ -156,26 +156,6 @@ export function buildAnchorContext(vault) {
   const identity = resolveRepos(vault, [reposDir, join(vault, '..')]);
   for (const [name, dir] of identity.paths) repoByName.set(name, dir);
 
-  // Fallback for vaults with no repos.json: the original REPOS_DIR-relative scan,
-  // keyed by folder name and by git remote. Kept so existing vaults keep working
-  // unchanged until they are seeded.
-  if (existsSync(reposDir)) {
-    for (const e of readdirSync(reposDir, { withFileTypes: true })) {
-      if (!e.isDirectory()) continue;
-      const dir = join(reposDir, e.name);
-      if (!repoByName.has(e.name)) repoByName.set(e.name, dir); // folder name always resolves
-      const cfg = join(dir, '.git', 'config');
-      if (existsSync(cfg)) {
-        const m = readFileSync(cfg, 'utf8').match(/^\s*url\s*=\s*\S*?([^\/:]+?)(?:\.git)?\s*$/m);
-        if (m && !repoByName.has(m[1])) repoByName.set(m[1], dir);
-      }
-    }
-  }
-
-  // Repos the vault CLAIMS to cover: graphify/ mirrors plus anything named in
-  // repos.json. A name here that did not resolve above is *unresolvable*, not rot.
-  const claimed = [...new Set([...covered, ...Object.keys(identity.identity || {})])];
-
   // Entry name (lowercased) → normalized remote, for the area cross-check.
   // repos.json may contain SUB-PATH ALIASES — entries like `docs` or `lib` that
   // are directories inside some repo, not repos themselves. An alias globally
@@ -185,6 +165,39 @@ export function buildAnchorContext(vault) {
   const remoteByName = new Map();
   for (const [name, spec] of Object.entries(identity.identity || {}))
     remoteByName.set(name.toLowerCase(), normalizeRemote(spec?.remote));
+  // Checkout root → its repos.json remote, so a fallback name below that points
+  // at a registered checkout carries that remote into the cross-check too.
+  const key = (d) => resolve(d).toLowerCase();
+  const remoteByRoot = new Map();
+  for (const [name, m] of identity.meta) remoteByRoot.set(key(m.root), remoteByName.get(name.toLowerCase()));
+
+  // Fallback for vaults with no repos.json: the original REPOS_DIR-relative scan,
+  // keyed by folder name and by git remote. Kept so existing vaults keep working
+  // unchanged until they are seeded. A name added here for a checkout repos.json
+  // already registers takes that entry's remote: without one, an anchor written
+  // with the folder name skipped the cross-check and verified (INNOV-376).
+  const alias = (name, dir) => {
+    if (repoByName.has(name)) return;
+    repoByName.set(name, dir);
+    const remote = remoteByRoot.get(key(dir));
+    if (remote && !remoteByName.has(name.toLowerCase())) remoteByName.set(name.toLowerCase(), remote);
+  };
+  if (existsSync(reposDir)) {
+    for (const e of readdirSync(reposDir, { withFileTypes: true })) {
+      if (!e.isDirectory()) continue;
+      const dir = join(reposDir, e.name);
+      alias(e.name, dir); // folder name always resolves
+      const cfg = join(dir, '.git', 'config');
+      if (existsSync(cfg)) {
+        const m = readFileSync(cfg, 'utf8').match(/^\s*url\s*=\s*\S*?([^\/:]+?)(?:\.git)?\s*$/m);
+        if (m) alias(m[1], dir);
+      }
+    }
+  }
+
+  // Repos the vault CLAIMS to cover: graphify/ mirrors plus anything named in
+  // repos.json. A name here that did not resolve above is *unresolvable*, not rot.
+  const claimed = [...new Set([...covered, ...Object.keys(identity.identity || {})])];
 
   return { vault, covered, reposDir, repoByName, claimed, remoteByName, identity };
 }
