@@ -317,6 +317,39 @@ else
   fail "note-alias/json-dead-only-control" "got: [$(cat "$BOX/out.json")]"
 fi
 
+# --- 9b. inline-list and scalar `aliases:` resolve too (INNOV-367) ---------
+# YAML (and Obsidian) accept `aliases: [A, B]` and `aliases: A` besides the
+# block list. fileAliases feeds both the dead-link check and the connectivity
+# section, so an inline alias must be neither a dead link nor a ghost target.
+# CRLF variant included; a quoted entry may hold a comma.
+BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+VAULT="$BOX/vault"
+mkdir -p "$VAULT/wiki"
+printf -- '---\nid: inline-lf\naliases: [Inline One, "Inline, Two"]\n---\n# T\n' >"$VAULT/wiki/inline-lf.md"
+printf -- "---\r\nid: inline-crlf\r\naliases: ['Crlf Inline']\r\n---\r\n# T\r\n" >"$VAULT/wiki/inline-crlf.md"
+printf -- '---\nid: scalar\naliases: Scalar Name\n---\n# T\n' >"$VAULT/wiki/scalar.md"
+printf -- '---\nid: empty\naliases: []\n---\n# T\n' >"$VAULT/wiki/empty.md"
+printf -- '---\nid: commented\naliases: [Commented] # legacy\n---\n# T\n' >"$VAULT/wiki/commented.md"
+printf -- 'See [[Inline One]], [[Inline, Two]], [[Crlf Inline]], [[Scalar Name]], [[Commented]] and [[Nobody At All]].\n' >"$VAULT/wiki/linker.md"
+( cd "$BOX" && BRAIN_ROOT="$VAULT" node "$FRESH" --stdout ) >"$BOX/out.md" 2>/dev/null
+for a in 'Inline One' 'Inline, Two' 'Crlf Inline' 'Scalar Name' 'Commented'; do
+  if grep -qF "\`$a\`" "$BOX/out.md"; then
+    fail "inline-alias/not-dead:$a" "[[${a}]] reported dead: [$(grep -F "$a" "$BOX/out.md")]"
+  else
+    pass "inline-alias/not-dead:$a"
+  fi
+done
+if grep -qF '`Nobody At All`' "$BOX/out.md" && grep -qF 'Dead `[[wikilinks]]` (1)' "$BOX/out.md"; then
+  pass "inline-alias/dead-control"
+else
+  fail "inline-alias/dead-control" "expected exactly [[Nobody At All]] dead: [$(grep -F 'Dead' "$BOX/out.md")]"
+fi
+if grep -qF '1 unresolved link targets' "$BOX/out.md"; then
+  pass "inline-alias/connectivity-one-ghost"
+else
+  fail "inline-alias/connectivity-one-ghost" "got: [$(grep -F 'unresolved link targets' "$BOX/out.md")]"
+fi
+
 # --- 10. --json marks which findings count toward the total (INNOV-374) ----
 # Every finding carries a boolean `counted`; the counted ones sum to the
 # Markdown's "N item(s) to review". Singleton tags, unverifiable anchors and
