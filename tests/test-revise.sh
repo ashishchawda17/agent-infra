@@ -207,6 +207,12 @@ check "claim/ambiguous-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/twi
 claim wiki/twice.md 'not there' 'X.'
 rv apply "$TMPROOT/e.jsonl"; rc=$?
 check "claim/absent-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/twice.md: .*0 times' "$TMPROOT/out.txt"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
+claim wiki/twice.md 'last_verified: 2020-01-01' 'last_verified: 2099-01-01'
+rv apply "$TMPROOT/e.jsonl"; rc=$?
+check "claim/frontmatter-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/twice.md: .*0 times in the body' "$TMPROOT/out.txt" && cmp -s "$VAULT/wiki/twice.md" "$TMPROOT/twice.before"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
+claim wiki/twice.md 'Nothing imports it. Nothing imports it.' $'X.\nstatus: falsified'
+rv apply "$TMPROOT/e.jsonl"; rc=$?
+check "claim/multiline-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/twice.md: .*one line' "$TMPROOT/out.txt" && cmp -s "$VAULT/wiki/twice.md" "$TMPROOT/twice.before"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
 
 printf '%s\n' '{"note":"wiki/_drafts/dr.md","kind":"claim","blob":"x","from":"Draft","to":"D"}' '{"note":"wiki/../x.md","kind":"claim","blob":"x","from":"a","to":"b"}' >"$TMPROOT/e.jsonl"
 rv apply "$TMPROOT/e.jsonl"; rc=$?

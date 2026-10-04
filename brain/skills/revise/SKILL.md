@@ -16,7 +16,7 @@ Resolve the vault root as `$BRAIN_ROOT` (else the current project dir / cwd).
 
 **Hard limits. Never cross these:**
 - **No edit without approval.** Line-drift edits may be approved as one group; every side-claim edit is approved per note.
-- **Smallest diff.** Only the wrong reference or sentence changes. Never restructure a note, never add a claim. `revise.mjs apply` enforces it: a drift edit rewrites only the cited `path:line` refs, and a claim edit replaces one exact substring that occurs once.
+- **Smallest diff.** Only the wrong reference or sentence changes. Never restructure a note, never add a claim. `revise.mjs apply` enforces it: a drift edit rewrites only the cited `path:line` refs, and a claim edit replaces one exact single-line substring that occurs once in the body, never in frontmatter.
 - **Never touch `status:` or `confidence`.** A note marked `superseded` or `falsified` is out of scope: its conclusion changed, which calls for a new note, not a patch. `revise.mjs` refuses it. Raising confidence stays with `/brain:verify` (`low` → `medium`) and a person (`high`).
 - **Never apply stale evidence.** A note changed since verify judged it, or a reference branch that moved since, is re-derived, not applied.
 - Never touch `wiki/_drafts/` (that is `/brain:promote`'s queue), never delete or archive a note.

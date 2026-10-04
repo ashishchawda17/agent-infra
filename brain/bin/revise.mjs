@@ -21,7 +21,7 @@
 //
 // apply — edits, one JSON object per line:
 //   {note, kind: "drift", blob, drift: [{old, new}]}   — a queue drift line as is
-//   {note, kind: "claim", blob, from, to}             — `from` must occur once
+//   {note, kind: "claim", blob, from, to}             — one line, `from` once in the body
 //   A drift `old` matches as a whole path:line ref (`lib/a.ts:62` is not
 //   `lib/a.ts:620` or `xlib/a.ts:62`); a ref cited as a range (`:62-70`) is
 //   refused, and when `old` is not cited verbatim it is retried once without a
@@ -92,10 +92,15 @@ function plan(text, e) {
       spans.push(...s);
     }
   } else if (e.kind === 'claim') {
-    if (!e.from || typeof e.to !== 'string') return { refused: 'claim edit needs from and to' };
-    const n = text.split(e.from).length - 1;
-    if (n !== 1) return { refused: `from occurs ${n} times; it must occur exactly once` };
-    spans = [[text.indexOf(e.from), text.indexOf(e.from) + e.from.length, e.to]];
+    if (typeof e.from !== 'string' || !e.from || typeof e.to !== 'string') return { refused: 'claim edit needs from and to' };
+    if (/[\r\n]/.test(e.from + e.to)) return { refused: 'a claim edit is one line; from and to may not span lines' };
+    // Body only: frontmatter (status:, confidence:, source:) is never a claim edit.
+    const start = text.match(/^---\r?\n[\s\S]*?\r?\n---/)?.[0].length ?? 0;
+    const body = text.slice(start);
+    const n = body.split(e.from).length - 1;
+    if (n !== 1) return { refused: `from occurs ${n} times in the body; it must occur exactly once` };
+    const at = start + body.indexOf(e.from);
+    spans = [[at, at + e.from.length, e.to]];
   } else return { refused: `unknown kind ${JSON.stringify(e.kind)}` };
   spans.sort((a, b) => a[0] - b[0]);
   if (spans.some((s, i) => i && s[0] < spans[i - 1][1])) return { refused: 'overlapping drift refs' };
