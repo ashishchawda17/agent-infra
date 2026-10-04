@@ -440,6 +440,75 @@ assert_eq "vault-carve-out/other-dir-still-missing-roots" "MISSING-ROOTS" "$(aud
 status="$(run_ds "$VAULT_DS" ../graphify/dsrepo)"
 assert_eq "vault-carve-out/traversing-name-not-read" "MISSING-ROOTS" "$(audit_verdict)" "output: [$(audit_all)]"
 
+# INNOV-350: nested and glob carve-outs from the shipped templates count too.
+# graphify drops migrations/*.js, so a top-level migrations/ holding only .js
+# has zero nodes BY DESIGN, and the audit used to refuse it anyway.
+REPO_GL="$TMPROOT/repoGlob"
+make_repo "$REPO_GL" src
+mkdir -p "$REPO_GL/migrations/versions" "$REPO_GL/Foo.Tests"
+printf 'module.exports = 1;\n' >"$REPO_GL/migrations/001-init.js"
+printf 'x = 1\n' >"$REPO_GL/migrations/versions/abc123.py"
+printf 'class A {}\n' >"$REPO_GL/Foo.Tests/Helpers.cs"
+VAULT_GL="$TMPROOT/vaultGlob"
+mkdir -p "$VAULT_GL/graphify/globrepo"
+run_gl() { # carve-out-text -> exit code
+  printf "$1" >"$VAULT_GL/graphify/globrepo/.graphifyignore"
+  BRAIN_ROOT="$(to_native "$VAULT_GL")" node "$(to_native "$AUDIT")" \
+    --graph "$(to_native "$TMPROOT/d-ds.json")" --repo-root "$(to_native "$REPO_GL")" \
+    --name globrepo >"$AOUT" 2>"$AERR"
+  echo $?
+}
+GLOB_CARVE='migrations/*.js\nmigrations/versions/\n*.Tests/\n'
+
+status="$(run_gl "$GLOB_CARVE")"
+assert_eq "glob-carve-out/honoured-exit-0" "0" "$status" "output: [$(audit_all)]"
+assert_contains "glob-carve-out/ok-names-the-carved-dirs" "carved out vault-side: Foo.Tests migrations" "$(audit_all)"
+
+status="$(run_gl "$(printf '%s' "$GLOB_CARVE" | sed 's/\\n/\\r\\n/g')")"
+assert_eq "glob-carve-out/crlf-honoured-exit-0" "0" "$status" "output: [$(audit_all)]"
+
+# Negative control: without the glob lines both dirs are source-bearing again.
+status="$(run_gl 'node_modules/\n')"
+assert_eq "glob-carve-out/absent-still-missing-roots" "MISSING-ROOTS" "$(audit_verdict)" "output: [$(audit_all)]"
+assert_contains "glob-carve-out/absent-names-migrations" "migrations/" "$(audit_all)"
+assert_contains "glob-carve-out/absent-names-tests-project" "Foo.Tests/" "$(audit_all)"
+
+# Control: one un-carved source file in the same dir still makes it a finding.
+printf 'export const y = 1;\n' >"$REPO_GL/migrations/helper.ts"
+status="$(run_gl "$GLOB_CARVE")"
+assert_eq "glob-carve-out/uncarved-file-still-missing-roots" "MISSING-ROOTS" "$(audit_verdict)" "output: [$(audit_all)]"
+assert_contains "glob-carve-out/uncarved-file-names-migrations" "migrations/" "$(audit_all)"
+assert_not_contains "glob-carve-out/uncarved-file-tests-project-still-carved" "Foo.Tests/" "$(audit_all)"
+rm -f "$REPO_GL/migrations/helper.ts"
+
+# migrations/*.js is relative to the repo root, as graphify reads it: a nested
+# src/migrations/ is not carved by it, so a top-level db/migrations/ is not either.
+mkdir -p "$REPO_GL/db/migrations"
+printf 'module.exports = 1;\n' >"$REPO_GL/db/migrations/001-init.js"
+status="$(run_gl "$GLOB_CARVE")"
+assert_eq "glob-carve-out/path-pattern-is-root-relative" "MISSING-ROOTS" "$(audit_verdict)" "output: [$(audit_all)]"
+assert_contains "glob-carve-out/path-pattern-names-db" "db/" "$(audit_all)"
+rm -rf "$REPO_GL/db"
+
+# fnmatch, not JS regex: `^` in a class is literal (only `!` negates), and a
+# reversed range compiles to a non-match instead of crashing the audit.
+status="$(run_gl "$GLOB_CARVE"'[z-a]\nmigrations/[^0]*.js\n')"
+assert_eq "glob-carve-out/reversed-range-does-not-crash" "0" "$status" "output: [$(audit_all)]"
+status="$(run_gl 'migrations/[^0]*.js\nmigrations/versions/\n*.Tests/\n')"
+assert_eq "glob-carve-out/caret-is-literal-in-class" "0" "$status" "output: [$(audit_all)]"
+status="$(run_gl 'migrations/[!a]*.js\nmigrations/versions/\n*.Tests/\n')"
+assert_eq "glob-carve-out/bang-negates-class" "0" "$status" "output: [$(audit_all)]"
+# A `]` right after `[` is a class member in fnmatch, not an empty class.
+status="$(run_gl 'migrations/[]0]*.js\nmigrations/versions/\n*.Tests/\n')"
+assert_eq "glob-carve-out/leading-bracket-is-member" "0" "$status" "output: [$(audit_all)]"
+
+# graphify strips an inline ` # comment` (whitespace before the #), so the audit
+# must too, or a commented carve-out matches nothing and refuses a correct graph.
+status="$(run_gl 'migrations/*.js  # legacy knex\nmigrations/versions/ # alembic\n*.Tests/\n')"
+assert_eq "glob-carve-out/inline-comment-stripped" "0" "$status" "output: [$(audit_all)]"
+status="$(run_gl 'migrations/*.js  # legacy knex\r\nmigrations/versions/ # alembic\r\n*.Tests/\r\n')"
+assert_eq "glob-carve-out/inline-comment-stripped-crlf" "0" "$status" "output: [$(audit_all)]"
+
 echo "--- E. SKIPPED is never OK ---"
 
 # 1. no --repo-root => direction (b) never ran. Clean (a) is NOT an OK.
