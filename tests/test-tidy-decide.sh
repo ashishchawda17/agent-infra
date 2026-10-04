@@ -49,6 +49,7 @@ gitinit() { # gitinit <dir> [remote]
   git -C "$1" config user.name "Tidy Test"
   git -C "$1" config commit.gpgsign false
   git -C "$1" config core.autocrlf false
+  git -C "$1" config core.quotepath true   # git's default, pinned against a global override
   [[ -n "${2:-}" ]] && git -C "$1" remote add origin "$2"
   return 0
 }
@@ -93,7 +94,11 @@ note wiki/alpha/session.md 0 $'id: session\nsource: verified-in-session/2026-09-
 note wiki/alpha/nosrc.md 0 $'id: nosrc\ntags: [shell, bash-tricks]' 'Read `docs/guide.md` first.'
 note wiki/alpha/linker.md 0 $'id: linker\nsource: alpha/docs/guide.md\ntags: [shell, ops]' 'See [[_COMMUNITY_Old Name|the old cluster]] and [[_COMMUNITY_Old Name#Members]] and [[_COMMUNITY_Aliased Label]].'
 note wiki/_drafts/d.md 0 $'id: d\nsource: alpha/src/old.sh\ntags: [draftonly]' 'Draft [[_COMMUNITY_Old Name]].'
-printf -- '---\nid: index\n---\n[[renamed]] [[cross]] [[cross2]] [[session]] [[nosrc]] [[linker]] [[tool]] [[wrongrepo]]\n' >"$VAULT/wiki/index.md"
+# A stub named after an em-dash label (INNOV-323). git octal-quotes the name unless
+# quotepath is off, so the deleted stub could not be read back from history.
+EMDASH=$'\xe2\x80\x94'
+note wiki/alpha/emlinker.md 0 $'id: emlinker\nsource: alpha/docs/guide.md\ntags: [shell, ops]' "See [[_COMMUNITY_Acc ${EMDASH} Floor]]."
+printf -- '---\nid: index\n---\n[[renamed]] [[cross]] [[cross2]] [[session]] [[nosrc]] [[linker]] [[tool]] [[wrongrepo]] [[emlinker]]\n' >"$VAULT/wiki/index.md"
 
 stub() { # stub <file-base> <alias|-> <member...>
   local f="$VAULT/graphify/alpha/communities/$1.md" a="$2"; shift 2
@@ -105,6 +110,7 @@ stub() { # stub <file-base> <alias|-> <member...>
 echo '{}' >"$VAULT/graphify/alpha/graph.json"
 stub "_COMMUNITY_Old Name" - a b c
 stub "_COMMUNITY_Community 5" "_COMMUNITY_Aliased Label" c y
+stub "_COMMUNITY_Acc ${EMDASH} Floor" - y z
 commit "$VAULT" "old stubs"
 rm "$VAULT/graphify/alpha/communities/"*.md
 stub "_COMMUNITY_Split One" - a b x
@@ -152,6 +158,8 @@ check "tag/pair" "$([[ "$(labels tag-pair:constraint+constraints)" == constraint
 check "tag/lone-has-existing-tag" "$([[ "$(labels tag:wiki/alpha/nosrc.md:bash-tricks)" == shell\|* || "$(labels tag:wiki/alpha/nosrc.md:bash-tricks)" == *ops* ]]; echo $?)" "got: [$(labels tag:wiki/alpha/nosrc.md:bash-tricks)]"
 check "link/member-overlap-filename" "$([[ "$(labels 'link:wiki/alpha/linker.md:_COMMUNITY_Old Name')" == '_COMMUNITY_Split One|_COMMUNITY_Split Two|'* ]]; echo $?)" "got: [$(labels 'link:wiki/alpha/linker.md:_COMMUNITY_Old Name')]"
 check "link/member-overlap-alias" "$([[ "$(labels 'link:wiki/alpha/linker.md:_COMMUNITY_Aliased Label')" == '_COMMUNITY_Split Two|'* ]]; echo $?)" "got: [$(labels 'link:wiki/alpha/linker.md:_COMMUNITY_Aliased Label')]"
+EM_ID="link:wiki/alpha/emlinker.md:_COMMUNITY_Acc ${EMDASH} Floor"
+check "link/non-ascii-stub-from-history" "$([[ "$(labels "$EM_ID")" == '_COMMUNITY_Split Two|'* ]]; echo $?)" "got: [$(labels "$EM_ID")]"
 check "link/verify-replacement" "$([[ "$(labels 'link:wiki/alpha/linker.md:_COMMUNITY_Aliased Label')" == *_COMMUNITY_Unrelated* ]]; echo $?)" "got: [$(labels 'link:wiki/alpha/linker.md:_COMMUNITY_Aliased Label')]"
 check "questions/skip-drafts" "$(! grep -q '_drafts' "$Q"; echo $?)" "q: [$(grep _drafts "$Q")]"
 check "questions/at-most-4-options" "$(node -e 'const l=require("fs").readFileSync(process.argv[1],"utf8").split("\n").filter(Boolean).map(JSON.parse);process.exit(l.every(q=>q.options.length>=2&&q.options.length<=4&&q.header.length<=12)?0:1)' "$Q"; echo $?)" "q: [$(qdump)]"

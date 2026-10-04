@@ -53,9 +53,10 @@ import { buildAnchorContext, classifyAnchors, parseFrontmatter } from './anchors
 
 const readJson = (f) => JSON.parse(readFileSync(f, 'utf8'));
 const readLines = (f) => readFileSync(f, 'utf8').split(/\r?\n/).filter((l) => l.trim()).map((l) => JSON.parse(l));
+// quotepath off: path lists come back verbatim, not octal-quoted (INNOV-323).
 const git = (dir, args) => {
   try {
-    return execFileSync('git', ['-C', dir, ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 << 20 });
+    return execFileSync('git', ['-C', dir, '-c', 'core.quotepath=off', ...args], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 64 << 20 });
   } catch { return ''; }
 };
 const isDraft = (n) => n.startsWith('wiki/_drafts/');
