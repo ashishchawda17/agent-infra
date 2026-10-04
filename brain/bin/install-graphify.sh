@@ -7,6 +7,10 @@
 # (verified on uv 0.11.17: a wrong hash installs), so download the wheel, check
 # its sha256 here, and hand uv the local file. Extra args pass through to uv
 # (e.g. --reinstall).
+# ponytail: only the graphifyy wheel is hash-pinned; uv resolves its ~29
+# dependencies (numpy, tree-sitter-*) from the index unhashed. Hashing the
+# whole closure needs per-platform wheel hashes and an install path other than
+# `uv tool install`, which takes none.
 set -eu
 
 GRAPHIFY_VERSION=0.8.46
