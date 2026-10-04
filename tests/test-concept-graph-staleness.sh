@@ -380,6 +380,22 @@ assert_eq "deletion-only/exit-1" "1" "$STATUS" \
   "26 deleted notes are 26 phantom nodes — the graph is stale" "$(evidence "$BOX")"
 assert_contains "deletion-only/names-26" "26 document(s) behind" \
   "$(first_line "$BOX/err.txt")" "$(evidence "$BOX")"
+# INNOV-351: an incremental --update cannot drop deleted notes' nodes (graphify's
+# shrink guard refuses the smaller graph after the update has already forgotten
+# the deletions), so the remedy for a deletion must be the full rebuild.
+assert_full_rebuild_remedy() { # name — reads $BOX/err.txt
+  local err
+  err="$(tr -d '\r' <"$BOX/err.txt")"
+  assert_contains "$1/remedy-full-rebuild" "rm graphify-out/graph.json" "$err" "$(evidence "$BOX")"
+  if [[ "$err" == *"(skill, wiki --update)"* ]]; then
+    fail "$1/remedy-not-update" "a deletion must not be sent to wiki --update" "$(evidence "$BOX")"
+  else
+    pass "$1/remedy-not-update"
+  fi
+}
+assert_full_rebuild_remedy deletion-only
+assert_contains "deletion-only/remedy-names-26-deleted" "26 of them are deleted notes" \
+  "$(tr -d '\r' <"$BOX/err.txt")" "$(evidence "$BOX")"
 
 # negative control: deletion-only, at threshold stays OK (no heavier weighting)
 graphed_vault 30
@@ -400,6 +416,7 @@ run_guard "$GUARD" CONCEPT_GRAPH_THRESHOLD=5
 assert_eq "mixed/exit-1" "1" "$STATUS" "$(evidence "$BOX")"
 assert_contains "mixed/names-6" "6 document(s) behind" "$(first_line "$BOX/err.txt")" \
   "$(evidence "$BOX")"
+assert_full_rebuild_remedy mixed
 
 # CRLF variant (SPO-346): an autocrlf vault with CRLF notes counts the same.
 BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
@@ -418,6 +435,7 @@ run_guard "$GUARD" CONCEPT_GRAPH_THRESHOLD=5
 assert_eq "crlf-deletions/exit-1" "1" "$STATUS" "$(evidence "$BOX")"
 assert_contains "crlf-deletions/names-6" "6 document(s) behind" \
   "$(first_line "$BOX/err.txt")" "$(evidence "$BOX")"
+assert_full_rebuild_remedy crlf-deletions
 
 # NEGATIVE CONTROL: a guard that drops the --deleted stream is the INNOV-292 bug;
 # on the deletion-only fixture it must go green, proving the case above can fail.
@@ -437,6 +455,35 @@ assert_eq "deleted-negative-control/mutant-goes-green" "0" "$STATUS" \
   "without the --deleted stream, 26 phantom nodes read as OK - 0" "$(evidence "$BOX")"
 run_guard "$GUARD"
 assert_eq "deleted-negative-control/real-guard-STALE" "1" "$STATUS" "$(evidence "$BOX")"
+
+# add/modify-only STALE keeps the --update remedy: proves the branch exists.
+new_vault
+add_notes "$VAULT" prior 30
+run_guard "$GUARD"
+assert_contains "no-deletions/remedy-update" "(skill, wiki --update)" \
+  "$(tr -d '\r' <"$BOX/err.txt")" "$(evidence "$BOX")"
+if grep -q 'rm graphify-out/graph.json' "$BOX/err.txt"; then
+  fail "no-deletions/no-full-rebuild" "no note was deleted; --update is enough" "$(evidence "$BOX")"
+else
+  pass "no-deletions/no-full-rebuild"
+fi
+
+# NEGATIVE CONTROL (INNOV-351): a guard that never counts deletions for the
+# remedy sends a deletion to --update, where the phantom nodes survive.
+RMUT="$TMPROOT/remedy-mutant-bin"
+mkdir -p "$RMUT"
+cp "$CWN" "$RMUT/changed-wiki-notes.sh"
+sed 's/^D=.*/D=0/' "$GUARD" >"$RMUT/check-concept-graph.sh"
+if cmp -s "$GUARD" "$RMUT/check-concept-graph.sh"; then
+  fail "remedy-negative-control/mutation-applied" "sed did not change the guard"
+else
+  pass "remedy-negative-control/mutation-applied"
+fi
+graphed_vault 30
+delete_notes "$VAULT" old 1 26
+run_guard "$RMUT/check-concept-graph.sh"
+assert_contains "remedy-negative-control/mutant-says-update" "(skill, wiki --update)" \
+  "$(tr -d '\r' <"$BOX/err.txt")" "$(evidence "$BOX")"
 
 # --- 12. STALE names the count at the last save (INNOV-300) ------------------
 # A skip that becomes routine compounds: the skip line must show N AND what N
@@ -583,7 +630,8 @@ for want in \
   'changed-wiki-notes.sh" --deleted --since' \
   'the only case where `--force` is right' \
   'build_merge' \
-  'DETECT-NARROW:'; do
+  'DETECT-NARROW:' \
+  'never `--update` when a note was deleted'; do
   assert_contains "save-5c/has:$want" "$want" "$STEP5C" \
     "brain/skills/save/SKILL.md step 5c must carry this sentence"
 done

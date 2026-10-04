@@ -101,6 +101,7 @@ if [[ "$CWN_STATUS" -ne 0 ]]; then
 fi
 # The streams are disjoint by construction, so summing them never double-counts.
 N="$(printf '%s\n%s\n' "$STALE_LIST" "$DELETED_LIST" | grep -c . | tr -d ' \r')"
+D="$(printf '%s\n' "$DELETED_LIST" | grep -c . | tr -d ' \r')"
 
 # --- 2. verdict — the count is printed on BOTH paths ------------------------
 if [[ "$N" -le "$THRESHOLD" ]]; then
@@ -131,8 +132,20 @@ fi
   echo "  across ALL sessions — the session-changed list alone cannot see this."
   echo "  /brain:save runs the refresh on this verdict; declining needs a stated reason,"
   echo "  recorded with this line."
-  echo "  Remedy: run /brain:save step 5c's graphify refresh (skill, wiki --update),"
-  echo "  then commit graphify-out/, and re-run:"
+  if [[ "$D" -gt 0 ]]; then
+    # INNOV-351, measured on graphify 0.8.46: --update prunes the deleted notes'
+    # nodes in memory, then the #479 shrink guard refuses to write the smaller
+    # graph.json, and the update has already saved a manifest without them, so a
+    # re-run reports nothing to update. The phantom nodes survive for good.
+    echo "  $D of them are deleted notes. An incremental wiki --update cannot drop their"
+    echo "  nodes: graphify's shrink guard (#479) refuses the smaller graph, and the update"
+    echo "  has already forgotten the deletions. Remedy: rm graphify-out/graph.json, then"
+    echo "  run /brain:save step 5c's full build (skill, wiki, no --update; git keeps the"
+    echo "  old graph), then commit graphify-out/, and re-run:"
+  else
+    echo "  Remedy: run /brain:save step 5c's graphify refresh (skill, wiki --update),"
+    echo "  then commit graphify-out/, and re-run:"
+  fi
   echo "    BRAIN_ROOT=\"$VAULT\" bash check-concept-graph.sh"
 } >&2
 exit 1
