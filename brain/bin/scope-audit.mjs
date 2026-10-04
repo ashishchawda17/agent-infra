@@ -278,7 +278,7 @@ for (const n of nodes) {
 const outOfScopeDeterminable = files.size > 0;
 
 // --- direction (b): source-bearing directories with zero nodes --------------
-function dirHasSource(absDir, relPrefix, depth) {
+function dirHasSource(absDir, relPrefix, depth, carved = () => false) {
   let entries;
   try {
     entries = readdirSync(absDir, { withFileTypes: true });
@@ -291,37 +291,73 @@ function dirHasSource(absDir, relPrefix, depth) {
       if (depth <= 0) continue;
       if (e.name.startsWith('.')) continue;
       if (NEVER_SOURCE_ROOT.has(e.name.toLowerCase())) continue;
-      if (dirHasSource(join(absDir, e.name), rel + '/', depth - 1)) return true;
+      if (carved(rel)) continue;
+      if (dirHasSource(join(absDir, e.name), rel + '/', depth - 1, carved)) return true;
     } else if (e.isFile()) {
       // A directory holding nothing but eslint.config.mjs is not source-bearing.
-      if (SOURCE_EXT.test(e.name) && !OUT.test(rel)) return true;
+      if (SOURCE_EXT.test(e.name) && !OUT.test(rel) && !carved(rel)) return true;
     }
   }
   return false;
 }
 
-// Top-level dirs the VAULT-SIDE carve-out drops deliberately (INNOV-306). Only
+// Paths the VAULT-SIDE carve-out drops deliberately (INNOV-306, INNOV-350). Only
 // the vault copy counts: it is the reviewed one, while the checkout copy is a
 // disposable build input, and honouring it would bring back the unreviewable
 // ignore file this module exists to replace. The name must be one path segment
-// so a traversing --name cannot read another target's carve-out. Direction (b)
-// only tests top-level names, so plain line matching is enough — no globs, and
-// `!negation` lines are forbidden by the standard anyway.
-function vaultCarvedRoots() {
+// so a traversing --name cannot read another target's carve-out.
+//
+// Matching is PORTED from graphify's own detect.py `_is_ignored`, because the
+// question is "did graphify drop this path", not "what would git do": fnmatch
+// (`*` crosses `/`), slashes stripped from both ends, a leading `/` anchors to
+// the root, an unanchored pattern also matches any single segment, and every
+// ancestor is tested too. `!negation` lines are forbidden by the standard, so
+// they are skipped rather than ported. Case-insensitive, as on the Windows
+// hosts these vaults are built on.
+function fnmatchRe(p) {
+  let re = '';
+  for (let i = 0; i < p.length; i++) {
+    const c = p[i];
+    if (c === '*') re += '.*';
+    else if (c === '?') re += '.';
+    else if (c === '[' && p.indexOf(']', i + 2) !== -1) {
+      const j = p.indexOf(']', i + 2);
+      let body = p.slice(i + 1, j).replace(/\\/g, '\\\\');
+      if (body[0] === '!') body = '^' + body.slice(1);
+      re += `[${body}]`;
+      i = j;
+    } else re += c.replace(/[.+^${}()|[\]\\/]/g, '\\$&');
+  }
+  return new RegExp(`^${re}$`, 'is');
+}
+
+function vaultCarveOut() {
   const name = label || mirror;
-  const carved = new Set();
-  if (!/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(name)) return carved;
-  let text;
-  try {
-    text = readFileSync(join(VAULT, 'graphify', name, '.graphifyignore'), 'utf8');
-  } catch {
-    return carved;
+  const rules = [];
+  if (/^[A-Za-z0-9_][A-Za-z0-9._-]*$/.test(name)) {
+    let text = '';
+    try {
+      text = readFileSync(join(VAULT, 'graphify', name, '.graphifyignore'), 'utf8');
+    } catch {
+      // no vault-side carve-out: nothing is carved
+    }
+    for (const line of text.split(/\r?\n/)) {
+      const raw = line.trim();
+      if (!raw || raw.startsWith('#') || raw.startsWith('!')) continue;
+      const p = raw.replace(/^\/+/, '').replace(/\/+$/, '');
+      if (p) rules.push({ re: fnmatchRe(p), anchored: raw.startsWith('/') });
+    }
   }
-  for (const line of text.split(/\r?\n/)) {
-    const p = line.trim().replace(/^\/+/, '').replace(/\/+$/, '');
-    if (p && !p.startsWith('#') && !p.startsWith('!')) carved.add(p.toLowerCase());
-  }
-  return carved;
+  return (rel) => {
+    const parts = rel.split('/');
+    for (let i = 0; i < parts.length; i++) {
+      const prefix = parts.slice(0, i + 1).join('/');
+      for (const { re, anchored } of rules) {
+        if (re.test(prefix) || (!anchored && re.test(parts[i]))) return true;
+      }
+    }
+    return false;
+  };
 }
 
 let rootsDeterminable = false;
@@ -338,13 +374,19 @@ if (repoRootAbs) {
   }
   if (topEntries) {
     rootsDeterminable = true;
-    const carved = vaultCarvedRoots();
+    const carved = vaultCarveOut();
     for (const e of topEntries) {
       if (!e.isDirectory()) continue;
       if (e.name.startsWith('.')) continue;
       if (NEVER_SOURCE_ROOT.has(e.name.toLowerCase())) continue;
-      if (!dirHasSource(join(repoRootAbs, e.name), e.name + '/', MAX_DEPTH)) continue;
-      if (carved.has(e.name.toLowerCase())) { carvedRoots.push(e.name); continue; }
+      const abs = join(repoRootAbs, e.name);
+      if (!dirHasSource(abs, e.name + '/', MAX_DEPTH)) continue;
+      // Source-bearing, but every source file in it is carved: graphify built
+      // zero nodes there on purpose.
+      if (carved(e.name) || !dirHasSource(abs, e.name + '/', MAX_DEPTH, carved)) {
+        carvedRoots.push(e.name);
+        continue;
+      }
       sourceRoots.push(e.name);
       if (!topDirsWithNodes.has(e.name.toLowerCase())) missingRoots.push(e.name);
     }
@@ -412,7 +454,7 @@ if (outOfScopeDeterminable && rootsDeterminable) {
     `${nodes.length} nodes / ${files.size} files, 0 out of scope, ${sourceRoots.length} source root(s) all present`,
     [
       `  source roots covered: ${sourceRoots.join(' ') || '(none found in the checkout)'}`,
-      ...(carvedRoots.length ? [`  carved out vault-side: ${carvedRoots.join(' ')}`] : []),
+      ...(carvedRoots.length ? [`  carved out vault-side: ${carvedRoots.sort().join(' ')}`] : []),
       ...prefixLines,
     ],
   );
