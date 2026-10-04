@@ -18,6 +18,7 @@
 # No network: `origin` is a local bare repo in a temp dir. No real vault is
 # touched. Every case gets its own fresh mktemp -d sandbox.
 set -uo pipefail
+unset BRAIN_ROOT CLAUDE_PROJECT_DIR  # never the real vault; see test-suite-isolation.sh
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/.." && pwd)"

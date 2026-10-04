@@ -25,6 +25,7 @@
 # No network, no real vault. A real `node` on PATH is required — the auditor is
 # node code and is under test, so it is never stubbed.
 set -uo pipefail
+unset BRAIN_ROOT CLAUDE_PROJECT_DIR  # never the real vault; see test-suite-isolation.sh
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/.." && pwd)"

@@ -33,6 +33,7 @@
 # Run:  bash tests/test-doctor-checks.sh   (from anywhere)
 # No network. The plugin registries are faked in a sandboxed CLAUDE_CONFIG_DIR.
 set -uo pipefail
+unset BRAIN_ROOT CLAUDE_PROJECT_DIR  # never the real vault; see test-suite-isolation.sh
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/.." && pwd)"

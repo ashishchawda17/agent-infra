@@ -18,6 +18,7 @@
 # Run:  bash tests/test-file-finding.sh   (from anywhere)
 # No network, no git, no Jira. Every case gets its own mktemp -d sandbox.
 set -uo pipefail
+unset BRAIN_ROOT CLAUDE_PROJECT_DIR  # never the real vault; see test-suite-isolation.sh
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/.." && pwd)"

@@ -29,6 +29,7 @@
 # genuinely under test (resolve-repos.mjs, label-guard.mjs) to a real interpreter
 # and no-ops the rest, so a real `node` on PATH is required.
 set -uo pipefail
+unset BRAIN_ROOT CLAUDE_PROJECT_DIR  # never the real vault; see test-suite-isolation.sh
 
 TEST_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(cd "$TEST_DIR/.." && pwd)"
