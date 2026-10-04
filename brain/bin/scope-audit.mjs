@@ -322,13 +322,19 @@ function fnmatchRe(p) {
     else if (c === '?') re += '.';
     else if (c === '[' && p.indexOf(']', i + 2) !== -1) {
       const j = p.indexOf(']', i + 2);
+      // Only `!` negates in fnmatch; a leading `^` is a literal.
       let body = p.slice(i + 1, j).replace(/\\/g, '\\\\');
       if (body[0] === '!') body = '^' + body.slice(1);
+      else if (body[0] === '^') body = '\\' + body;
       re += `[${body}]`;
       i = j;
     } else re += c.replace(/[.+^${}()|[\]\\/]/g, '\\$&');
   }
-  return new RegExp(`^${re}$`, 'is');
+  try {
+    return new RegExp(`^${re}$`, 'is');
+  } catch {
+    return /(?!)/; // fnmatch compiles a reversed range like [z-a] to a non-match
+  }
 }
 
 function vaultCarveOut() {

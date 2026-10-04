@@ -490,6 +490,15 @@ assert_eq "glob-carve-out/path-pattern-is-root-relative" "MISSING-ROOTS" "$(audi
 assert_contains "glob-carve-out/path-pattern-names-db" "db/" "$(audit_all)"
 rm -rf "$REPO_GL/db"
 
+# fnmatch, not JS regex: `^` in a class is literal (only `!` negates), and a
+# reversed range compiles to a non-match instead of crashing the audit.
+status="$(run_gl "$GLOB_CARVE"'[z-a]\nmigrations/[^0]*.js\n')"
+assert_eq "glob-carve-out/reversed-range-does-not-crash" "0" "$status" "output: [$(audit_all)]"
+status="$(run_gl 'migrations/[^0]*.js\nmigrations/versions/\n*.Tests/\n')"
+assert_eq "glob-carve-out/caret-is-literal-in-class" "0" "$status" "output: [$(audit_all)]"
+status="$(run_gl 'migrations/[!a]*.js\nmigrations/versions/\n*.Tests/\n')"
+assert_eq "glob-carve-out/bang-negates-class" "0" "$status" "output: [$(audit_all)]"
+
 echo "--- E. SKIPPED is never OK ---"
 
 # 1. no --repo-root => direction (b) never ran. Clean (a) is NOT an OK.
