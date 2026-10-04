@@ -9,10 +9,11 @@
 #     byte-identical, CRLF kept: :620 is not :62, a range is refused, a ref
 #     cited with its repo prefix dropped still matches, a moved source: says so
 #   - apply (claim) replaces a `from` that occurs exactly once, nothing else
-#   - apply refuses a stale blob, a status-marked note, a draft; --dry-run
-#     writes nothing
+#   - apply refuses a stale blob, evidence whose reference branch moved or
+#     has no sha, a status-marked note, a draft; --dry-run writes nothing
 #   - bump sets last_verified to today, keeps CRLF and a trailing comment,
-#     leaves confidence alone, refuses drafts and status-marked notes
+#     raises low to medium (verify's holds row) and nothing else, refuses
+#     drafts and status-marked notes
 #
 # Run:  bash tests/test-revise.sh   (from anywhere; needs node)
 set -uo pipefail
@@ -126,9 +127,19 @@ last_verified: 2020-01-01
 Draft at lib/d.ts:1.
 EOF
 
+# The reference repo the evidence points at: folder "sm" under REPOS_DIR,
+# origin/main at SHA.
+REPO="$TMPROOT/repos/sm"
+mkdir -p "$REPO"
+git -C "$REPO" init -q && git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m one
+SHA="$(git -C "$REPO" rev-parse HEAD)"
+git -C "$REPO" update-ref refs/remotes/origin/main "$SHA"
+export REPOS_DIR="$TMPROOT/repos"
+EV='"evidence":{"refs":["sm/lib/x.ts:1"],"branch":"main","sha":"'"${SHA:0:7}"'"}'
+
 # Verdicts go in through verify's own store, so the blobs are the real ones.
-cat >"$TMPROOT/v.jsonl" <<'EOF'
-{"note":"wiki/drift.md","kind":"claim","verdict":"cannot-tell","subtype":"line-drift","drift":[{"old":"lib/utils.ts:62","new":"lib/utils.ts:65"},{"old":"sm/lib/a.ts:10","new":"sm/lib/a.ts:12"}],"reason":"moved","evidence":{"refs":["sm/lib/utils.ts:65"],"branch":"main","sha":"abc1234"}}
+sed "s|,\"reason\"|,$EV,\"reason\"|" >"$TMPROOT/v.jsonl" <<'EOF'
+{"note":"wiki/drift.md","kind":"claim","verdict":"cannot-tell","subtype":"line-drift","drift":[{"old":"lib/utils.ts:62","new":"lib/utils.ts:65"},{"old":"sm/lib/a.ts:10","new":"sm/lib/a.ts:12"}],"reason":"moved"}
 {"note":"wiki/moved.md","kind":"claim","verdict":"cannot-tell","subtype":"line-drift","drift":[{"old":".github/workflows/test.yml:108","new":".github/workflows/rls-tests.yml:59"}],"reason":"job moved"}
 {"note":"wiki/range.md","kind":"claim","verdict":"cannot-tell","subtype":"line-drift","drift":[{"old":"lib/b.ts:62","new":"lib/b.ts:64"}],"reason":"moved"}
 {"note":"wiki/side.md","kind":"claim","verdict":"cannot-tell","subtype":"side-claim","reason":"lib/upload-service.ts:2 imports it"}
@@ -184,7 +195,7 @@ rv apply "$TMPROOT/e.jsonl"; rc=$?
 check "drift/range-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/range.md: .*range' "$TMPROOT/out.txt" && cmp -s "$VAULT/wiki/range.md" "$TMPROOT/range.before"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
 
 printf '%s\n' "$(qline wiki/side.md | node -e 'const l=JSON.parse(require("fs").readFileSync(0,"utf8"));
-  console.log(JSON.stringify({note:l.note,kind:"drift",blob:l.blob,drift:[{old:"lib/z.ts:1",new:"lib/z.ts:2"}]}))')" >"$TMPROOT/e.jsonl"
+  console.log(JSON.stringify({note:l.note,kind:"drift",blob:l.blob,evidence:l.evidence,drift:[{old:"lib/z.ts:1",new:"lib/z.ts:2"}]}))')" >"$TMPROOT/e.jsonl"
 rv apply "$TMPROOT/e.jsonl"; rc=$?
 check "drift/uncited-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/side.md: .*not cited' "$TMPROOT/out.txt"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
 
@@ -195,7 +206,7 @@ check "apply/status-marked-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki
 # --- 3. claim: from must occur exactly once ------------------------------------
 claim() { # claim <note> <from> <to>
   qline "$1" | node -e 'const [f,t]=process.argv.slice(1);const l=JSON.parse(require("fs").readFileSync(0,"utf8"));
-    console.log(JSON.stringify({note:l.note,kind:"claim",blob:l.blob,from:f,to:t}))' "$2" "$3" >"$TMPROOT/e.jsonl"
+    console.log(JSON.stringify({note:l.note,kind:"claim",blob:l.blob,evidence:l.evidence,from:f,to:t}))' "$2" "$3" >"$TMPROOT/e.jsonl"
 }
 claim wiki/side.md 'Nothing imports lib/supabase.ts.' 'Only lib/upload-service.ts imports lib/supabase.ts.'
 rv apply "$TMPROOT/e.jsonl"; rc=$?
@@ -218,13 +229,27 @@ printf '%s\n' '{"note":"wiki/_drafts/dr.md","kind":"claim","blob":"x","from":"Dr
 rv apply "$TMPROOT/e.jsonl"; rc=$?
 check "apply/draft-and-escape-refused" "$([[ $rc -ne 0 && "$(grep -c '^REFUSED' "$TMPROOT/out.txt")" == 2 ]] && grep -q '^Draft' "$VAULT/wiki/_drafts/dr.md"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
 
+# --- 4. reference branch: moved or unknown evidence is refused ------------------
+cp "$VAULT/wiki/range.md" "$TMPROOT/range.before"
+claim wiki/range.md 'See lib/b.ts:62-70 for the loop.' 'See lib/b.ts:64-72 for the loop.'
+git -C "$REPO" -c user.name=t -c user.email=t@t commit -q --allow-empty -m two
+git -C "$REPO" update-ref refs/remotes/origin/main HEAD
+rv apply "$TMPROOT/e.jsonl"; rc=$?
+check "ref/moved-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/range.md: origin/main moved' "$TMPROOT/out.txt" && cmp -s "$VAULT/wiki/range.md" "$TMPROOT/range.before"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
+git -C "$REPO" update-ref refs/remotes/origin/main "$SHA"
+node -e 'const l=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));delete l.evidence;console.log(JSON.stringify(l))' "$TMPROOT/e.jsonl" >"$TMPROOT/e2.jsonl"
+rv apply "$TMPROOT/e2.jsonl"; rc=$?
+check "ref/no-evidence-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/range.md: no evidence' "$TMPROOT/out.txt" && cmp -s "$VAULT/wiki/range.md" "$TMPROOT/range.before"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
+rv apply "$TMPROOT/e.jsonl"; rc=$?
+check "ref/back-at-sha-applies" "$([[ $rc -eq 0 ]] && grep -q 'lib/b.ts:64-72' "$VAULT/wiki/range.md"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
+
 # --- 4. bump -------------------------------------------------------------------
 rv bump wiki/drift.md wiki/moved.md; rc=$?
 check "bump/runs" "$([[ $rc -eq 0 && "$(grep -c '^BUMPED' "$TMPROOT/out.txt")" == 2 ]]; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
 node -e 'const [f,d]=process.argv.slice(1);let t=require("fs").readFileSync(f,"utf8");
   process.stdout.write(t.replace("last_verified: "+d,"last_verified: 2020-01-01"))' "$VAULT/wiki/drift.md" "$TODAY" >"$TMPROOT/drift.unbumped"
 check "bump/crlf-comment-only-date" "$(cmp -s "$TMPROOT/drift.unbumped" "$TMPROOT/drift.expected" && grep -q "^last_verified: $TODAY  # checked by hand"$'\r'"\$" "$VAULT/wiki/drift.md"; echo $?)" "file: [$(od -c "$VAULT/wiki/drift.md" | head -8)]"
-check "bump/confidence-untouched" "$(grep -q '^confidence: low' "$VAULT/wiki/moved.md"; echo $?)" "file: [$(cat "$VAULT/wiki/moved.md")]"
+check "bump/low-to-medium" "$(grep -q '^confidence: medium$' "$VAULT/wiki/moved.md" && grep -q 'confidence low → medium' "$TMPROOT/out.txt"; echo $?)" "file: [$(cat "$VAULT/wiki/moved.md")]"
 rv bump wiki/gone.md wiki/_drafts/dr.md; rc=$?
 check "bump/refuses-status-and-draft" "$([[ $rc -ne 0 && "$(grep -c '^REFUSED' "$TMPROOT/out.txt")" == 2 ]] && grep -q 'last_verified: 2020-01-01' "$VAULT/wiki/gone.md" "$VAULT/wiki/_drafts/dr.md"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
 

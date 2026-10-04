@@ -1,6 +1,6 @@
 ---
 name: revise
-description: "Turn /brain:verify's saved could-not-tell evidence into approved body edits on trusted notes: rewrite drifted file:line references, fix one wrong side claim, re-verify, bump last_verified, one PR. No edit without approval; never touches status or raises confidence. Trigger: /brain:revise [wiki/note.md], or 'fix the line drift' / 'revise the notes verify could not confirm'."
+description: "Turn /brain:verify's saved could-not-tell evidence into approved body edits on trusted notes: rewrite drifted file:line references, fix one wrong side claim, re-verify, bump last_verified, one PR. No edit without approval; never touches status, never raises confidence to high. Trigger: /brain:revise [wiki/note.md], or 'fix the line drift' / 'revise the notes verify could not confirm'."
 ---
 
 # /brain:revise — apply verify's evidence as approved body edits
@@ -17,8 +17,8 @@ Resolve the vault root as `$BRAIN_ROOT` (else the current project dir / cwd).
 **Hard limits. Never cross these:**
 - **No edit without approval.** Line-drift edits may be approved as one group; every side-claim edit is approved per note.
 - **Smallest diff.** Only the wrong reference or sentence changes. Never restructure a note, never add a claim. `revise.mjs apply` enforces it: a drift edit rewrites only the cited `path:line` refs, and a claim edit replaces one exact single-line substring that occurs once in the body, never in frontmatter.
-- **Never touch `status:` or `confidence`.** A note marked `superseded` or `falsified` is out of scope: its conclusion changed, which calls for a new note, not a patch. `revise.mjs` refuses it. Raising confidence stays with `/brain:verify` (`low` → `medium`) and a person (`high`).
-- **Never apply stale evidence.** A note changed since verify judged it, or a reference branch that moved since, is re-derived, not applied.
+- **Never touch `status:`, never raise `confidence` to `high`.** A note marked `superseded` or `falsified` is out of scope: its conclusion changed, which calls for a new note, not a patch. `revise.mjs` refuses it. A bump after a re-check that holds raises `low` to `medium`, exactly as `/brain:verify`'s `holds` row does; `high` stays a person's call.
+- **Never apply stale evidence.** A note changed since verify judged it, or a reference branch that moved since, is re-derived, not applied. `revise.mjs apply` enforces both: it refuses an edit whose `blob` is not the note's, or whose `evidence.sha` is not `origin/<evidence.branch>` in the evidence's repo (or cannot be checked there).
 - Never touch `wiki/_drafts/` (that is `/brain:promote`'s queue), never delete or archive a note.
 
 ## What to do when invoked
@@ -47,7 +47,7 @@ Each line is one could-not-tell record: `{note, kind: "drift"|"claim", subtype, 
 For every line, check the evidence is still current:
 
 - `stale: true` → the note changed since verify judged it.
-- `evidence.sha` differs from `git -C <checkout> rev-parse origin/<evidence.branch>` (after `git fetch`; the checkout comes from `resolve-repos.mjs --print-paths`) → the code moved since.
+- `evidence.sha` differs from `git -C <checkout> rev-parse origin/<evidence.branch>` (after `git fetch`; the checkout comes from `resolve-repos.mjs --print-paths`) → the code moved since. `apply --dry-run` reports it as `REFUSED … moved`, so a preview is enough to find these.
 
 Either way, do not use the stored `drift` or `reason`. Dispatch `/brain:verify`'s **claim** brief (its step 4, unchanged) for that note against the current reference branch, and use the fresh verdict: `holds` → `revise.mjs bump` it (step 5) and record it; another `line-drift` / `side-claim` → carry on with its new evidence and the note's current blob (`revise.mjs queue` prints it after `verify-findings.mjs record`); anything else → list it and leave it.
 
@@ -60,7 +60,7 @@ Also run `/brain:verify` step 3's open-PR check: a note an open PR already edits
   node "${CLAUDE_PLUGIN_ROOT}/bin/revise.mjs" apply "$E" --dry-run
   ```
   Each `PROPOSED` is followed by its `- ` / `+ ` lines. A `REFUSED` drift (a ref cited as a range, or not cited verbatim) becomes a side-claim proposal instead: the subagent below drafts the reference change.
-- **Side claim:** dispatch one read-only subagent per note, in parallel: "Note `<note>` was judged: `<reason>` (evidence `<evidence.refs>` on `origin/<branch>` at `<sha>`). Read the note and that code with `git show` / `git grep` on `origin/<branch>`. Draft the smallest edit that makes the note true: replace one exact sentence or phrase, add no new claim, change nothing else. Return one JSON object: `{\"note\": \"...\", \"kind\": \"claim\", \"from\": \"<exact text, copied from the note, that occurs once>\", \"to\": \"<replacement>\", \"evidence\": \"<repo/path:line on origin/<branch>>\"}`, or `{\"note\": \"...\", \"none\": \"<why>\"}` when no single-sentence edit fixes it." Add the queue line's `blob` to each answer and preview them with `apply --dry-run` as above. A `REFUSED` claim (its `from` occurs 0 or 2+ times) goes back to its subagent once with the reason.
+- **Side claim:** dispatch one read-only subagent per note, in parallel: "Note `<note>` was judged: `<reason>` (evidence `<evidence.refs>` on `origin/<branch>` at `<sha>`). Read the note and that code with `git show` / `git grep` on `origin/<branch>`. Draft the smallest edit that makes the note true: replace one exact sentence or phrase, add no new claim, change nothing else. Return one JSON object: `{\"note\": \"...\", \"kind\": \"claim\", \"from\": \"<exact text, copied from the note, that occurs once>\", \"to\": \"<replacement>\", \"evidence\": \"<repo/path:line on origin/<branch>>\"}`, or `{\"note\": \"...\", \"none\": \"<why>\"}` when no single-sentence edit fixes it." Add the queue line's `blob` and `evidence` to each answer (the subagent's `evidence` string goes in the PR table, not the edit) and preview them with `apply --dry-run` as above. A `REFUSED` claim (its `from` occurs 0 or 2+ times) goes back to its subagent once with the reason.
 
 ### 4. Approve
 
@@ -81,17 +81,17 @@ It re-checks each note's blob, so a note that changed while the questions were o
 
 A revise is a verification event, the way `/brain:promote` treats a promote. For each `APPLIED` note, dispatch `/brain:verify`'s **claim** brief again, unchanged, against the reference branch. Then:
 
-- `holds` → `node "${CLAUDE_PLUGIN_ROOT}/bin/revise.mjs" bump <note> [...]` (sets `last_verified` to today, nothing else).
-- anything else → not bumped. Keep the edit only if the person approved it on its own merits, and list the note with the new verdict.
+- `holds` → `node "${CLAUDE_PLUGIN_ROOT}/bin/revise.mjs" bump <note> [...]` (sets `last_verified` to today and `low` → `medium`, nothing else).
+- anything else → not bumped. The approved edit stays; list the note with the new verdict.
 
-Write the re-verify verdicts that are **not** `holds` as JSON lines (verify's format), then record them so the next verify or revise run sees them:
+Write every re-verify verdict as a JSON line (verify's format), then record them so the next verify or revise run sees them:
 
 ```bash
 F="$(mktemp)"; node "${CLAUDE_PLUGIN_ROOT}/bin/freshness.mjs" --json > "$F"
 node "${CLAUDE_PLUGIN_ROOT}/bin/verify-findings.mjs" record "$F" <reverify.jsonl> [--pr <n>]   # an empty file is fine
 ```
 
-That also drops the bumped notes' old could-not-tell records, because they have left the queue.
+A `holds` replaces the note's old could-not-tell record, so `revise.mjs queue` stops offering it, and the record is dropped on a later run once the bumped note has left verify's queue.
 
 ### 6. Commit and open one PR
 

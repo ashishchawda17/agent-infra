@@ -20,28 +20,33 @@
 //   limits it to one note; a note with no such record prints {note, norecord: true}.
 //
 // apply — edits, one JSON object per line:
-//   {note, kind: "drift", blob, drift: [{old, new}]}   — a queue drift line as is
-//   {note, kind: "claim", blob, from, to}             — one line, `from` once in the body
+//   {note, kind: "drift", blob, drift: [{old, new}], evidence} — a queue drift line as is
+//   {note, kind: "claim", blob, from, to, evidence}  — one line, `from` once in the body
 //   A drift `old` matches as a whole path:line ref (`lib/a.ts:62` is not
 //   `lib/a.ts:620` or `xlib/a.ts:62`); a ref cited as a range (`:62-70`) is
 //   refused, and when `old` is not cited verbatim it is retried once without a
 //   leading segment both sides share (the repo name). Every `old` must be cited,
 //   or the note is refused. Refused too: a blob that no longer matches, a
-//   status-marked note, a draft, a path outside wiki/. Only the matched text
+//   status-marked note, a draft, a path outside wiki/, and evidence whose
+//   reference branch moved (origin/<evidence.branch> in the evidence's repo is
+//   no longer evidence.sha) or cannot be checked. Only the matched text
 //   changes; line endings are untouched. Prints PROPOSED (with --dry-run) or
 //   APPLIED, `- `/`+ ` lines for each changed line, SOURCE-CHANGED when the
 //   source: line moved (run check-anchors.mjs on it), and REFUSED <note>: why.
 //
 // bump — last_verified → today (local date), keeping CRLF and a trailing
-//   # comment. Never touches confidence or status. Refuses drafts, status-marked
-//   notes, and a note with no last_verified line.
+//   # comment, and confidence low → medium: /brain:verify's `holds` row, since
+//   the skill bumps only after a re-check holds. Never sets high, never touches
+//   status. Refuses drafts, status-marked notes, and a note with no
+//   last_verified line.
 //
 // Exit 1 when anything was refused. Pure Node, no deps.
 
 import { readFileSync, writeFileSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import { createHash } from 'node:crypto';
-import { parseFrontmatter } from './anchors.mjs';
+import { execFileSync } from 'node:child_process';
+import { parseFrontmatter, buildAnchorContext } from './anchors.mjs';
 
 const FINDINGS = 'logs/verify-findings.json';
 const SUBTYPES = { 'line-drift': 'drift', 'side-claim': 'claim' };
@@ -67,6 +72,21 @@ function guard(vault, note) {
   if (!existsSync(join(vault, note))) return 'no such note';
   const m = marked(readFileSync(join(vault, note), 'utf8'));
   return m ? `status: ${m} (write a new note, not a patch)` : null;
+}
+
+// Why the edit's evidence is not current on its reference branch, or null.
+// evidence = {refs: ["<repo>/path:line"], branch, sha}; the repo is the first
+// ref's first segment, resolved the way check-anchors.mjs resolves anchors.
+function staleRef(ctx, ev) {
+  const repo = ev?.refs?.[0]?.split('/')[0];
+  if (!repo || !ev.branch || !/^[0-9a-f]{7,40}$/.test(ev.sha || '')) return 'no evidence {refs, branch, sha} to check the reference branch against; re-derive';
+  const dir = ctx().repoByName.get(repo);
+  if (!dir) return `repo ${repo} is not checked out here; cannot check origin/${ev.branch}`;
+  let cur = '';
+  try {
+    cur = execFileSync('git', ['-C', dir, 'rev-parse', `origin/${ev.branch}`], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }).trim();
+  } catch { return `origin/${ev.branch} not found in ${repo}`; }
+  return cur.startsWith(ev.sha) ? null : `origin/${ev.branch} moved since verify judged it (${ev.sha} → ${cur.slice(0, 7)}); re-derive`;
 }
 
 // [start, end, replacement] spans for one drift pair, or a refusal string.
@@ -143,6 +163,8 @@ function main(argv) {
   if (mode === 'apply') {
     if (!args[0]) die('usage: apply <edits.jsonl> [--dry-run]');
     const dry = argv.includes('--dry-run');
+    let c;
+    const ctx = () => (c ||= buildAnchorContext(vault));
     const lines = readFileSync(args[0], 'utf8').split(/\r?\n/).filter((l) => l.trim());
     let done = 0;
     for (const l of lines) {
@@ -153,6 +175,8 @@ function main(argv) {
       const path = join(vault, e.note);
       const text = readFileSync(path, 'utf8');
       if (blobOf(text) !== e.blob) { refuse(e.note, 'note changed since verify judged it; re-derive'); continue; }
+      const moved = staleRef(ctx, e.evidence);
+      if (moved) { refuse(e.note, moved); continue; }
       const p = plan(text, e);
       if (p.refused) { refuse(e.note, p.refused); continue; }
       if (!dry) writeFileSync(path, p.text);
@@ -176,8 +200,10 @@ function main(argv) {
       const fm = text.match(/^---\r?\n[\s\S]*?\r?\n---/)?.[0] ?? '';
       const re = /^(last_verified:[ \t]*)[^\s#]*/m;
       if (!re.test(fm)) { refuse(note, 'no last_verified line'); continue; }
-      writeFileSync(path, fm.replace(re, `$1${date}`) + text.slice(fm.length));
-      console.log(`BUMPED ${note} last_verified → ${date}`);
+      const low = /^confidence:[ \t]*low\b/m.test(fm);
+      const out = fm.replace(re, `$1${date}`).replace(/^(confidence:[ \t]*)low\b/m, '$1medium');
+      writeFileSync(path, out + text.slice(fm.length));
+      console.log(`BUMPED ${note} last_verified → ${date}${low ? ', confidence low → medium' : ''}`);
     }
     process.exit(refused ? 1 : 0);
   }
