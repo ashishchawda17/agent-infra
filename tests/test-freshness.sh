@@ -329,9 +329,10 @@ printf -- '---\nid: inline-lf\naliases: [Inline One, "Inline, Two"]\n---\n# T\n'
 printf -- "---\r\nid: inline-crlf\r\naliases: ['Crlf Inline']\r\n---\r\n# T\r\n" >"$VAULT/wiki/inline-crlf.md"
 printf -- '---\nid: scalar\naliases: Scalar Name\n---\n# T\n' >"$VAULT/wiki/scalar.md"
 printf -- '---\nid: empty\naliases: []\n---\n# T\n' >"$VAULT/wiki/empty.md"
-printf -- 'See [[Inline One]], [[Inline, Two]], [[Crlf Inline]], [[Scalar Name]] and [[Nobody At All]].\n' >"$VAULT/wiki/linker.md"
+printf -- '---\nid: commented\naliases: [Commented] # legacy\n---\n# T\n' >"$VAULT/wiki/commented.md"
+printf -- 'See [[Inline One]], [[Inline, Two]], [[Crlf Inline]], [[Scalar Name]], [[Commented]] and [[Nobody At All]].\n' >"$VAULT/wiki/linker.md"
 ( cd "$BOX" && BRAIN_ROOT="$VAULT" node "$FRESH" --stdout ) >"$BOX/out.md" 2>/dev/null
-for a in 'Inline One' 'Inline, Two' 'Crlf Inline' 'Scalar Name'; do
+for a in 'Inline One' 'Inline, Two' 'Crlf Inline' 'Scalar Name' 'Commented'; do
   if grep -qF "\`$a\`" "$BOX/out.md"; then
     fail "inline-alias/not-dead:$a" "[[${a}]] reported dead: [$(grep -F "$a" "$BOX/out.md")]"
   else

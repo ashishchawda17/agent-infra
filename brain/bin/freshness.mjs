@@ -259,11 +259,13 @@ function fileAliases(text) {
   const am = fm[1].match(/^aliases:\s*\n((?:[ \t]*-[ \t]*.*\n?)+)/m);
   if (am) return [...am[1].matchAll(/^[ \t]*-[ \t]*(.*)$/gm)].map((x) => unquote(x[1]));
   // Inline forms, valid YAML that Obsidian resolves too (INNOV-367):
-  // `aliases: [A, "B, C"]` (a quoted entry may hold a comma) and `aliases: A`.
+  // `aliases: [A, "B, C"]` (a quoted entry may hold a comma) and `aliases: A`,
+  // either with a trailing `# comment`. A multi-line flow list is not read.
   const im = fm[1].match(/^aliases:[ \t]*(\S.*?)[ \t]*$/m);
   if (!im) return [];
-  const list = im[1].match(/^\[(.*)\]$/);
-  if (!list) return [unquote(im[1])];
+  const value = enumValue(im[1]);
+  const list = value.match(/^\[(.*)\]$/);
+  if (!list) return [unquote(value)];
   return [...list[1].matchAll(/\s*("[^"]*"|'[^']*'|[^,]+)/g)].map((x) => unquote(x[1])).filter(Boolean);
 }
 const allFiles = walkAll(VAULT);
