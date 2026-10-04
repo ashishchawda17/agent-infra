@@ -429,6 +429,43 @@ run_check
 assert_eq "tracked-vault-local/exit-0" "0" "$STATUS" "$(evidence)"
 assert_out_has "tracked-vault-local/counts" "1 verified, 0 broken, 0 unverifiable" "$(evidence)"
 
+# --- 12b. a git-IGNORED file inside a covered repo checkout (INNOV-328) ----
+# The same false green one scope out: a repo's build output or `.env` exists on
+# the machine that built it and on no teammate's clone. It must read as
+# gitignored, and the scan must ask git once per repo, not once per anchor.
+echo "--- 12b. git-ignored repo anchor ---"
+sb_new
+printf 'dist/\n.env\n' >"$REPOS/demo/.gitignore"
+git -C "$REPOS/demo" add .gitignore
+git -C "$REPOS/demo" commit --quiet -m "ignore build output"
+mkdir -p "$REPOS/demo/dist"
+printf 'built\n' >"$REPOS/demo/dist/out.js"
+printf 'SECRET=1\n' >"$REPOS/demo/.env"
+mknote from-dist "demo/dist/out.js"
+run_check
+assert_eq "repo-gitignored/exit-2" "2" "$STATUS" "$(evidence)"
+assert_out_has "repo-gitignored/counts" "0 verified, 0 broken, 1 unverifiable" "$(evidence)"
+assert_out_has "repo-gitignored/says-why" "git-ignored" "$(evidence)"
+assert_out_lacks "repo-gitignored/never-called-rot" "BROKEN" "$(evidence)"
+assert_out_lacks "repo-gitignored/no-clone-advice" "repo(s) needed" "$(evidence)"
+
+# Positive control alongside, an ignored file at the repo root, and a CRLF
+# note (the vault is autocrlf). Three ignored anchors + one tracked, across
+# three notes: GIT_TRACE must show exactly one ls-files for the demo checkout.
+printf -- '---\r\nid: from-env\r\nsource: demo/.env\r\n---\r\n# e\r\n' >"$VAULT/wiki/_drafts/from-env.md"
+mknote mixed "demo/src/a.js; demo/dist/out.js"
+(
+  unset CLAUDE_PROJECT_DIR
+  GIT_TRACE="$(to_native "$BOX/git.trace")" BRAIN_ROOT="$(to_native "$VAULT")" REPOS_DIR="$(to_native "$REPOS")" \
+    node "$(to_native "$CHECK")"
+) >"$BOX/out.txt" 2>"$BOX/err.txt"
+STATUS=$?
+assert_eq "repo-gitignored/mixed-exit-2" "2" "$STATUS" "$(evidence)"
+assert_out_has "repo-gitignored/tracked-still-verifies" "1 verified, 0 broken, 3 unverifiable" "$(evidence)"
+assert_out_has "repo-gitignored/crlf-note" "wiki/_drafts/from-env.md — source: demo/.env" "$(evidence)"
+LSF="$(grep -c 'ls-files' "$BOX/git.trace" 2>/dev/null || true)"
+assert_eq "repo-gitignored/one-git-call-per-repo" "1" "$LSF" "trace: [$(grep 'ls-files' "$BOX/git.trace" 2>/dev/null | tr '\n' '|')]"
+
 # --- 13. frontmatter enums are gated, not just described (INNOV-341) ------
 # INNOV-334 fixed the prose; this is the exit code. A keeper whose
 # `confidence:` or `status:` is outside the INNOV-294 enums is a stop, with a

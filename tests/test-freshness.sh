@@ -141,11 +141,11 @@ printf -- '---\nid: from-chat\nsource: chats/demo/d1.md\ntags: [x]\n---\n# From 
   cd "$BOX" || exit 99
   BRAIN_ROOT="$VAULT" node "$FRESH" --stdout
 ) >"$BOX/out.txt" 2>"$BOX/err.txt"
-if grep -qF 'Git-ignored vault file (1)' "$BOX/out.txt" && grep -qF 'chats/demo/d1.md' "$BOX/out.txt"; then
+if grep -qF 'Git-ignored file (1)' "$BOX/out.txt" && grep -qF 'chats/demo/d1.md' "$BOX/out.txt"; then
   pass "gitignored-anchor/reported"
 else
   fail "gitignored-anchor/reported" \
-    "expected a 'Git-ignored vault file (1)' bucket naming chats/demo/d1.md" \
+    "expected a 'Git-ignored file (1)' bucket naming chats/demo/d1.md" \
     "report: [$(grep -iF -A3 'Unverifiable' "$BOX/out.txt")]" "stderr: [$(cat "$BOX/err.txt")]"
 fi
 
