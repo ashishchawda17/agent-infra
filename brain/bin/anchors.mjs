@@ -91,7 +91,7 @@ export function gitIgnores(cache, root, path) {
   }
   const set = cache.get(root);
   if (!set) return false;
-  if (set.has(path)) return true;
+  if (set.has(path) || set.has(path + '/')) return true; // a file, or the ignored dir itself
   const segs = path.split('/');
   for (let i = 1; i < segs.length; i++) if (set.has(segs.slice(0, i).join('/') + '/')) return true;
   return false;
