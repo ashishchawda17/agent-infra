@@ -863,9 +863,12 @@ assert_prefix "allowlist/absent-entry-verdict-OK" "VAULT-COMMIT: OK" "$(first_li
 # graphify community stubs take their name from the label, em dash and all. Read
 # with core.quotepath, git hands back "\342\200\224" in quotes, which no
 # .saveinclude glob matches, so an allowlisted stub was refused as foreign.
+# Each sandbox pins core.quotepath on: a global quotepath=false would let a
+# newline-delimited read see the name verbatim and hide the bug.
 EMDASH=$'\xe2\x80\x94'
 STUB="graphify-out/communities/IXS-ACC ${EMDASH} Accessibility Floor.md"
 sb_new "brain/work"
+git -C "$VAULT" config core.quotepath true
 GH_PATH="$GH_NONE"
 printf 'wiki/log.md\ngraphify-out/communities/\n' >"$VAULT/.saveinclude"
 mkdir -p "$VAULT/graphify-out/communities"
@@ -878,6 +881,7 @@ assert_eq "nonascii/staged-by-guard-in-head" "$STUB" \
 # Same stub, already in the shared index, under a CRLF .saveinclude: this is the
 # pre-staged read (read_index), a separate listing from the tree check above.
 sb_new "brain/work"
+git -C "$VAULT" config core.quotepath true
 GH_PATH="$GH_NONE"
 printf 'wiki/log.md\r\ngraphify-out/communities/\r\n' >"$VAULT/.saveinclude"
 mkdir -p "$VAULT/graphify-out/communities"
@@ -891,6 +895,7 @@ assert_eq "nonascii/pre-staged-in-head" "$STUB" \
 # Negative control: a non-ASCII path the allowlist does NOT cover is still
 # refused, and named as written rather than octal-quoted.
 sb_new "brain/work"
+git -C "$VAULT" config core.quotepath true
 GH_PATH="$GH_NONE"
 mkdir -p "$VAULT/private"
 echo "x" >"$VAULT/private/a ${EMDASH} b.md"
