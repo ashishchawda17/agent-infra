@@ -473,6 +473,13 @@ rm -f "$VAULT/wiki/_drafts/"*.md
 mknote dot-seg "demo/./dist/out.js"
 run_check
 assert_out_has "repo-gitignored/dot-segment" "0 verified, 0 broken, 1 unverifiable" "$(evidence)"
+
+# A MISSING file under an ignored dir is dead on every machine, this one too:
+# it stays broken (exit 1), never softened to unverifiable.
+mknote dot-seg "demo/dist/missing.js"
+run_check
+assert_eq "repo-gitignored/missing-stays-broken" "1" "$STATUS" "$(evidence)"
+assert_out_has "repo-gitignored/missing-counts" "0 verified, 1 broken, 0 unverifiable" "$(evidence)"
 case "$(uname -s)" in
 MINGW* | MSYS* | CYGWIN* | Darwin)
   mknote dot-seg "demo/DIST/out.js"

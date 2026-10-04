@@ -360,13 +360,12 @@ export function classifyAnchors(ctx, note) {
     // A file git ignores — wiki-ingest's vault-local `chats/<repo>/<digest>.md`
     // (INNOV-304), or a covered repo's build output or `.env` (INNOV-328) —
     // exists only on the machine that wrote it; for every teammate who clones
-    // it is a dead path. "On my disk" is not "verified".
-    if (gitIgnores(ctx.ignored, root, inRoot)) {
+    // it is a dead path. "On my disk" is not "verified". A missing file stays
+    // broken even under an ignored dir: it is dead everywhere, this machine too.
+    if (!existsSync(resolved)) out.push({ state: 'broken', from: rel, source: src, repo: firstSeg, looked: resolved });
+    else if (gitIgnores(ctx.ignored, root, inRoot))
       out.push({ state: 'unresolvable', from: rel, source: src, repo: null, reason: 'gitignored' });
-      continue;
-    }
-    if (existsSync(resolved)) out.push({ state: 'verified', from: rel, source: src, repo: firstSeg, resolved });
-    else out.push({ state: 'broken', from: rel, source: src, repo: firstSeg, looked: resolved });
+    else out.push({ state: 'verified', from: rel, source: src, repo: firstSeg, resolved });
   }
 
   return out;
