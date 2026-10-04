@@ -62,3 +62,23 @@ test('init offers the INNOV-356 graph wording to vaults that predate it (INNOV-3
   assert.match(offer, /How to query the graph/);
   assert.match(offer, /ask first/);
 });
+test('hook command tests for the graph in the shell before starting Node (INNOV-357)', t => {
+  const base = mkdtempSync(join(tmpdir(), 'brain-hooks-'));
+  t.after(() => rmSync(base, { recursive: true, force: true }));
+  const { command } = JSON.parse(readFileSync(fileURLToPath(new URL('../brain/hooks/hooks.json', import.meta.url)), 'utf8')).hooks.PreToolUse[0].hooks[0];
+  // A stand-in plugin root whose hook script records that Node started, then fails.
+  const root = join(base, 'plugin');
+  const ran = join(base, 'node-ran');
+  mkdirSync(join(root, 'hooks'), { recursive: true });
+  writeFileSync(join(root, 'hooks/graph-before-grep.mjs'), `import { writeFileSync } from 'node:fs'; writeFileSync(${JSON.stringify(ran)}, 'x'); process.exit(1);`);
+  const run = cwd => spawnSync('bash', ['-c', command], { cwd, input: '{}', encoding: 'utf8', env: { ...process.env, CLAUDE_PLUGIN_ROOT: root } });
+  const bare = join(base, 'bare');
+  mkdirSync(bare);
+  assert.equal(run(bare).status, 0);
+  assert.throws(() => readFileSync(ran), 'Node started in a repo with no graph');
+  const repo = join(base, 'repo');
+  mkdirSync(join(repo, 'graphify-out'), { recursive: true });
+  writeFileSync(join(repo, 'graphify-out/graph.json'), '{}');
+  assert.equal(run(repo).status, 0, 'a failing hook script must not fail the tool call');
+  assert.equal(readFileSync(ran, 'utf8'), 'x', 'Node must start when the graph exists');
+});
