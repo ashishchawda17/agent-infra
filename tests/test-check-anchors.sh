@@ -496,7 +496,7 @@ mkarea() { # area name source
 }
 mkarea other byname "demo/src/a.js"
 run_check "wiki/other/byname.md"
-assert_eq "folder-name/negative-control-repo-name-mismatch" "1" "$STATUS" "$(evidence)"
+assert_eq "folder-name/baseline-repo-name-mismatch" "1" "$STATUS" "$(evidence)"
 mkarea other byfolder "demo-clone/src/a.js"
 run_check "wiki/other/byfolder.md"
 assert_eq "folder-name/wrong-area-exit-1" "1" "$STATUS" \
