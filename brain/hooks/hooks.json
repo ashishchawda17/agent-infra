@@ -1,5 +1,5 @@
 {
-  "description": "Brain plugin hooks. The graph-before-grep PreToolUse hook is the §14.5 enforcement layer — it is self-gating (silent unless <cwd>/graphify-out/graph.json exists), fires once per session, reports graph built_at_commit vs HEAD (graph-first when fresh, advisory otherwise), non-blocking, and is the exact detection signal the §17.2 Track B consumer contract depends on.",
+  "description": "Brain plugin hooks. The graph-before-grep PreToolUse hook is the §14.5 enforcement layer — it is self-gating (silent unless <cwd>/graphify-out/graph.json exists; the command tests for the graph in the shell so Node starts only where one exists, INNOV-357 — needs sh / Git Bash, the PowerShell fallback cannot parse it), fires once per session, reports graph built_at_commit vs HEAD (graph-first when fresh, advisory otherwise), non-blocking, and is the exact detection signal the §17.2 Track B consumer contract depends on.",
   "hooks": {
     "PreToolUse": [
       {
@@ -7,7 +7,7 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node \"${CLAUDE_PLUGIN_ROOT}/hooks/graph-before-grep.mjs\""
+            "command": "test -f graphify-out/graph.json && node \"${CLAUDE_PLUGIN_ROOT}/hooks/graph-before-grep.mjs\" || true"
           }
         ]
       }
