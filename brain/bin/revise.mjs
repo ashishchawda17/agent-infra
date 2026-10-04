@@ -22,7 +22,8 @@
 // apply — edits, one JSON object per line:
 //   {note, kind: "drift", blob, drift: [{old, new}], evidence} — a queue drift line as is
 //   {note, kind: "claim", blob, from, to, evidence}  — one line, `from` once in the body
-//   A drift `old` matches as a whole path:line ref (`lib/a.ts:62` is not
+//   Both sides of a drift pair must be path:line refs (a file with an
+//   extension; anything else is refused). A drift `old` matches as a whole path:line ref (`lib/a.ts:62` is not
 //   `lib/a.ts:620` or `xlib/a.ts:62`); a ref cited as a range (`:62-70`) is
 //   refused, and when `old` is not cited verbatim it is retried once without a
 //   leading segment both sides share (the repo name). Every `old` must be cited,
@@ -91,6 +92,9 @@ function staleRef(ctx, ev) {
 
 // [start, end, replacement] spans for one drift pair, or a refusal string.
 function driftSpans(text, { old, new: neu }) {
+  // Only path:line refs, so a drift pair can never rewrite status:, dates or prose.
+  const ref = /^[^\s:]+\.[^\s:/]+:\d+(-\d+)?$/;
+  if (!ref.test(old ?? '') || !ref.test(neu ?? '')) return `drift ${JSON.stringify(old)} → ${JSON.stringify(neu)} is not a path:line pair`;
   const find = (o) => [...text.matchAll(new RegExp(`(?<![\\w.-])${esc(o)}(?!\\d)`, 'g'))];
   let hits = find(old), to = neu;
   const seg = old.match(/^[^/]+\//)?.[0];

@@ -199,6 +199,12 @@ printf '%s\n' "$(qline wiki/side.md | node -e 'const l=JSON.parse(require("fs").
 rv apply "$TMPROOT/e.jsonl"; rc=$?
 check "drift/uncited-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/side.md: .*not cited' "$TMPROOT/out.txt"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
 
+cp "$VAULT/wiki/twice.md" "$TMPROOT/twice.before"
+qline wiki/twice.md | node -e 'const l=JSON.parse(require("fs").readFileSync(0,"utf8"));
+  console.log(JSON.stringify({note:l.note,kind:"drift",blob:l.blob,evidence:l.evidence,drift:[{old:"last_verified: 2020-01-01",new:"status: falsified"}]}))' >"$TMPROOT/e.jsonl"
+rv apply "$TMPROOT/e.jsonl"; rc=$?
+check "drift/non-ref-pair-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/twice.md: .*not a path:line pair' "$TMPROOT/out.txt" && cmp -s "$VAULT/wiki/twice.md" "$TMPROOT/twice.before"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
+
 edits wiki/gone.md
 rv apply "$TMPROOT/e.jsonl"; rc=$?
 check "apply/status-marked-refused" "$([[ $rc -ne 0 ]] && grep -q '^REFUSED wiki/gone.md: .*superseded' "$TMPROOT/out.txt" && grep -q 'lib/c.ts:3' "$VAULT/wiki/gone.md"; echo $?)" "out: [$(cat "$TMPROOT/out.txt")]"
