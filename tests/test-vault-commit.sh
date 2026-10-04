@@ -859,6 +859,53 @@ run_guard -m "missing entries are fine"
 assert_eq "allowlist/absent-entry-not-an-error" "0" "$STATUS" "$(evidence)"
 assert_prefix "allowlist/absent-entry-verdict-OK" "VAULT-COMMIT: OK" "$(first_line "$BOX/out.txt")" "$(evidence)"
 
+# --- 26b. a non-ASCII file name under an allowlisted dir commits (INNOV-323) --
+# graphify community stubs take their name from the label, em dash and all. Read
+# with core.quotepath, git hands back "\342\200\224" in quotes, which no
+# .saveinclude glob matches, so an allowlisted stub was refused as foreign.
+# Each sandbox pins core.quotepath on: a global quotepath=false would let a
+# newline-delimited read see the name verbatim and hide the bug.
+EMDASH=$'\xe2\x80\x94'
+STUB="graphify-out/communities/IXS-ACC ${EMDASH} Accessibility Floor.md"
+sb_new "brain/work"
+git -C "$VAULT" config core.quotepath true
+GH_PATH="$GH_NONE"
+printf 'wiki/log.md\ngraphify-out/communities/\n' >"$VAULT/.saveinclude"
+mkdir -p "$VAULT/graphify-out/communities"
+echo "stub" >"$VAULT/$STUB"
+run_guard -m "non-ascii stub"
+assert_eq "nonascii/staged-by-guard-commits" "0" "$STATUS" "$(evidence)"
+assert_eq "nonascii/staged-by-guard-in-head" "$STUB" \
+  "$(git -C "$VAULT" ls-tree -r -z --name-only HEAD -- graphify-out/communities | tr -d '\0')" "$(evidence)"
+
+# Same stub, already in the shared index, under a CRLF .saveinclude: this is the
+# pre-staged read (read_index), a separate listing from the tree check above.
+sb_new "brain/work"
+git -C "$VAULT" config core.quotepath true
+GH_PATH="$GH_NONE"
+printf 'wiki/log.md\r\ngraphify-out/communities/\r\n' >"$VAULT/.saveinclude"
+mkdir -p "$VAULT/graphify-out/communities"
+echo "stub" >"$VAULT/$STUB"
+git -C "$VAULT" add -- "$STUB" >/dev/null 2>&1
+run_guard -m "pre-staged non-ascii stub"
+assert_eq "nonascii/pre-staged-commits" "0" "$STATUS" "$(evidence)"
+assert_eq "nonascii/pre-staged-in-head" "$STUB" \
+  "$(git -C "$VAULT" ls-tree -r -z --name-only HEAD -- graphify-out/communities | tr -d '\0')" "$(evidence)"
+
+# Negative control: a non-ASCII path the allowlist does NOT cover is still
+# refused, and named as written rather than octal-quoted.
+sb_new "brain/work"
+git -C "$VAULT" config core.quotepath true
+GH_PATH="$GH_NONE"
+mkdir -p "$VAULT/private"
+echo "x" >"$VAULT/private/a ${EMDASH} b.md"
+git -C "$VAULT" add -- "private/a ${EMDASH} b.md" >/dev/null 2>&1
+before="$(head_sha)"
+run_guard -m "foreign non-ascii"
+assert_eq "nonascii/foreign-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "nonascii/foreign-head-unmoved" "$before" "$(head_sha)" "$(evidence)"
+assert_contains "nonascii/foreign-named-verbatim" "private/a ${EMDASH} b.md" "$(out_all)" "$(evidence)"
+
 echo "--- F. arguments, vault resolution, and other preconditions ---"
 
 # --- 27. no message => refuse --------------------------------------------
