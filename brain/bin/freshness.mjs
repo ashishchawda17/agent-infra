@@ -255,9 +255,16 @@ function walkAll(dir, acc = []) {
 function fileAliases(text) {
   const fm = text.match(/^---\n([\s\S]*?)\n---/);
   if (!fm) return [];
+  const unquote = (s) => s.trim().replace(/^["']|["']$/g, '');
   const am = fm[1].match(/^aliases:\s*\n((?:[ \t]*-[ \t]*.*\n?)+)/m);
-  if (!am) return [];
-  return [...am[1].matchAll(/^[ \t]*-[ \t]*(.*)$/gm)].map((x) => x[1].trim().replace(/^["']|["']$/g, ''));
+  if (am) return [...am[1].matchAll(/^[ \t]*-[ \t]*(.*)$/gm)].map((x) => unquote(x[1]));
+  // Inline forms, valid YAML that Obsidian resolves too (INNOV-367):
+  // `aliases: [A, "B, C"]` (a quoted entry may hold a comma) and `aliases: A`.
+  const im = fm[1].match(/^aliases:[ \t]*(\S.*?)[ \t]*$/m);
+  if (!im) return [];
+  const list = im[1].match(/^\[(.*)\]$/);
+  if (!list) return [unquote(im[1])];
+  return [...list[1].matchAll(/\s*("[^"]*"|'[^']*'|[^,]+)/g)].map((x) => unquote(x[1])).filter(Boolean);
 }
 const allFiles = walkAll(VAULT);
 const allText = new Map(allFiles.map((f) => [f, readFileSync(f, 'utf8').replace(/\r\n/g, '\n')]));
