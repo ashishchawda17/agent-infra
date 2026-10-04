@@ -520,9 +520,12 @@ assert_eq "trunk/head-equals-origin-trunk-sha" "$want" "$(vault_sha)" "$(evidenc
 # --- 14. no origin/HEAD: the main/master safety net still finds the upstream --
 # detect_default_branch() comes up empty without origin/HEAD (and gh cannot read
 # a local-path remote), so the literal main/master net must still apply.
+# INNOV-352: origin's own HEAD dangles too, or the unconditional
+# `set-head --auto` would restore origin/HEAD and the net would go untested.
 echo "--- 14. no origin/HEAD: main/master safety net ---"
 sb_new
 git -C "$VAULT" remote set-head origin -d >/dev/null 2>&1
+git --git-dir="$ORIGIN" symbolic-ref HEAD refs/heads/nowhere
 seed_push "teammate" "wiki/hot.md" "hot cache v1"
 want="$(origin_sha)"
 run_fresh "$VAULT"
@@ -563,6 +566,29 @@ run_fresh "$VAULT"
 assert_eq "unfetched/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
 assert_prefix "unfetched/fast-forwarded" "FRESHNESS: OK - fast-forwarded 1 commit(s) from origin/main" "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
 assert_eq "unfetched/head-equals-origin-main-sha" "$want" "$(vault_sha)" "$(evidence "$BOX")"
+
+# --- 17. INNOV-352: origin switched its default but KEPT the old branch -------
+# A fetch never refreshes origin/HEAD, and origin/main still exists, so case 15's
+# missing-ref re-read never fired: freshness compared against the stale main and
+# approved a hot.md rewrite missing trunk's commits. The refresh also persists
+# origin/HEAD, so the later callers in the same save (vault-commit's
+# branch_is_protected, reap-branches) see trunk too. Negative control: make the
+# `set-head --auto` conditional again => "up to date with origin/main", HEAD unmoved.
+echo "--- 17. origin default switched, old branch kept: checked against the new one ---"
+sb_new
+git --git-dir="$ORIGIN" branch trunk main
+git --git-dir="$ORIGIN" symbolic-ref HEAD refs/heads/trunk
+DEF="trunk"
+printf 'hot cache v1' >"$SEED/wiki/hot.md"
+git -C "$SEED" commit --quiet -am "teammate, on the new default"
+git -C "$SEED" push --quiet origin HEAD:trunk
+want="$(origin_sha)"
+run_fresh "$VAULT"
+assert_eq "switched/exit-0" "0" "$STATUS" "$(evidence "$BOX")"
+assert_prefix "switched/fast-forwarded-from-trunk" "FRESHNESS: OK - fast-forwarded 1 commit(s) from origin/trunk" "$(first_line "$BOX/out.txt")" "$(evidence "$BOX")"
+assert_eq "switched/head-equals-origin-trunk-sha" "$want" "$(vault_sha)" "$(evidence "$BOX")"
+assert_eq "switched/origin-HEAD-persisted" "origin/trunk" \
+  "$(git -C "$VAULT" symbolic-ref --short refs/remotes/origin/HEAD 2>/dev/null)" "$(evidence "$BOX")"
 
 # ================================================================= SUMMARY ==
 echo

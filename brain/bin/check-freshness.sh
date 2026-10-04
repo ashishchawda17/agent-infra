@@ -81,15 +81,16 @@ fi
 # INNOV-342: so it is resolved AFTER the fetch. Resolved before, a ref that
 # `--prune` deleted (origin renamed its default) read as "up to date", and a ref
 # the fetch would have created read as "skipped". And a fetch never refreshes
-# origin/HEAD, so when it names a branch that no longer exists, re-read it from
-# origin once — skipping there would still let hot.md be rewritten from a stale base.
+# origin/HEAD, so re-read it from origin before detecting.
+# INNOV-352: every time, not only when the ref it names has vanished: origin can
+# switch its default and KEEP the old branch, and then the stale origin/HEAD still
+# resolves. This is the one refresh point: every save reaches it, right after its
+# fetch, and the ref it writes is what vault-commit.sh and reap-branches.sh read
+# later in the same save. Cost: one extra round trip per save. A failure leaves
+# the local ref untouched.
+git -C "$VAULT" remote set-head origin --auto >/dev/null 2>&1 || true
 UPSTREAM=""
 DEFAULT="$(detect_default_branch)"
-if [[ -n "$DEFAULT" ]] && ! git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT" >/dev/null 2>&1; then
-  if git -C "$VAULT" remote set-head origin --auto >/dev/null 2>&1; then
-    DEFAULT="$(detect_default_branch)"
-  fi
-fi
 # Same safety net branch_is_protected() uses when detection comes up empty.
 if [[ -z "$DEFAULT" ]]; then
   for cand in main master; do
