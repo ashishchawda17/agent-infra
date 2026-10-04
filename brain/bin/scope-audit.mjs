@@ -320,12 +320,16 @@ function fnmatchRe(p) {
     const c = p[i];
     if (c === '*') re += '.*';
     else if (c === '?') re += '.';
-    else if (c === '[' && p.indexOf(']', i + 2) !== -1) {
-      const j = p.indexOf(']', i + 2);
-      // Only `!` negates in fnmatch; a leading `^` is a literal.
-      let body = p.slice(i + 1, j).replace(/\\/g, '\\\\');
+    else if (c === '[') {
+      // As fnmatch.translate: a `]` right after `[` or `[!` is a literal member.
+      let j = i + 1;
+      if (p[j] === '!') j++;
+      if (p[j] === ']') j++;
+      j = p.indexOf(']', j);
+      if (j === -1) { re += '\\['; continue; }
+      // Only `!` negates in fnmatch; `^` and `]` are literals.
+      let body = p.slice(i + 1, j).replace(/[\\\]^]/g, '\\$&');
       if (body[0] === '!') body = '^' + body.slice(1);
-      else if (body[0] === '^') body = '\\' + body;
       re += `[${body}]`;
       i = j;
     } else re += c.replace(/[.+^${}()|[\]\\/]/g, '\\$&');

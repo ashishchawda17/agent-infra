@@ -498,6 +498,9 @@ status="$(run_gl 'migrations/[^0]*.js\nmigrations/versions/\n*.Tests/\n')"
 assert_eq "glob-carve-out/caret-is-literal-in-class" "0" "$status" "output: [$(audit_all)]"
 status="$(run_gl 'migrations/[!a]*.js\nmigrations/versions/\n*.Tests/\n')"
 assert_eq "glob-carve-out/bang-negates-class" "0" "$status" "output: [$(audit_all)]"
+# A `]` right after `[` is a class member in fnmatch, not an empty class.
+status="$(run_gl 'migrations/[]0]*.js\nmigrations/versions/\n*.Tests/\n')"
+assert_eq "glob-carve-out/leading-bracket-is-member" "0" "$status" "output: [$(audit_all)]"
 
 # graphify strips an inline ` # comment` (whitespace before the #), so the audit
 # must too, or a commented carve-out matches nothing and refuses a correct graph.
