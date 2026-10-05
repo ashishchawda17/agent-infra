@@ -1,0 +1,50 @@
+name: release PR
+
+# INNOV-330: when main holds pending .bumps/<plugin>/ fragments, open (or
+# refresh) one release/<plugin> PR that applies them with
+# tools/bump-version.mjs. The merge stays a human click; tagging the merge
+# commit and pushing the vendsy mirror stay manual.
+#
+# Repo prerequisite: Settings > Actions > General > "Allow GitHub Actions to
+# create and approve pull requests". Without it `gh pr create` returns 403.
+on:
+  push:
+    # No paths filter: release-pr.sh steps aside when main has moved past its
+    # commit, which is only safe if every push to main queues a run.
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: write       # push release/<plugin>
+  pull-requests: write  # open / edit the release PR
+  actions: write        # dispatch ci.yml on the release branch
+
+concurrency:
+  group: release-pr
+  cancel-in-progress: false
+
+jobs:
+  release-pr:
+    # Source repo only: the vendsy/agent-infra mirror receives this file on
+    # every ff-push and must never open a release there. Main only: a manual
+    # run from another branch would publish that branch as a release.
+    if: github.repository == 'karch4162/agent-infra' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Configure git identity
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+
+      - name: Open or refresh release PRs
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: bash tools/release-pr.sh
