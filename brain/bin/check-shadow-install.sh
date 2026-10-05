@@ -32,6 +32,11 @@
 #              scope, and the exact uninstall command. Nothing is uninstalled.
 # First line: "SHADOW-INSTALL: OK" / "SHADOW-INSTALL: SKIPPED" (stdout) or
 # "SHADOW-INSTALL: SHADOWED" (stderr).
+# Under any verdict node can reach, a "STALE-MARKETPLACE: WARN" advisory (stdout) names each
+# registered brain-family marketplace no live install comes from, when more than
+# one is registered (INNOV-336). Registered = known_marketplaces.json or
+# extraKnownMarketplaces; brain-family = its clone lists a brain-family plugin,
+# else its name. Inert, so it never changes the exit code.
 set -uo pipefail
 
 CLAUDE_DIR="${CLAUDE_CONFIG_DIR:-$HOME/.claude}"
@@ -97,7 +102,43 @@ LIVE="$(node -e '
     }
   }
   for (const [id, { version, where }] of live) console.log([id, version || "?", where].join("\t"));
+
+  // Registered marketplaces (INNOV-336): known_marketplaces.json plus
+  // extraKnownMarketplaces at each settings scope. Brain-family when its clone
+  // lists a brain-family plugin, or, with no readable clone, by its name.
+  const markets = new Map(); // name -> [where registered]
+  const reg = (name, where) => markets.set(name, [...(markets.get(name) || []), where]);
+  const known = readJson(path.join(claudeDir, "plugins", "known_marketplaces.json")) || {};
+  for (const name of Object.keys(known)) reg(name, "known_marketplaces.json");
+  for (const scope of ["user", "project", "local"])
+    for (const name of Object.keys((settings[scope] || {}).extraKnownMarketplaces || {}))
+      reg(name, "extraKnownMarketplaces in " + scope + " settings");
+  const brainMarket = name => {
+    const loc = (known[name] || {}).installLocation;
+    const m = loc && readJson(path.join(loc, ".claude-plugin", "marketplace.json"));
+    if (m) return (m.plugins || []).some(p => /(^|-)brain$/.test((p || {}).name || ""));
+    return /(^|-)brain(-|$)/.test(name);
+  };
+  const brainMarkets = [...markets.keys()].filter(brainMarket);
+  const liveMarkets = new Set([...live.keys()].map(id => mpOf(id.split("\t")[0])));
+  if (brainMarkets.length > 1)
+    for (const name of brainMarkets.filter(n => !liveMarkets.has(n)))
+      console.log(["MP", name, markets.get(name).join(", ")].join("\t"));
 ' "$CLAUDE_DIR_N" "$PROJECT" 2>/dev/null)"
+
+# A stale brain-family marketplace registration is inert, so it is an advisory
+# on stdout under any verdict, never a SHADOWED (INNOV-336).
+MARKETS="$(printf '%s\n' "$LIVE" | grep '^MP	')"
+LIVE="$(printf '%s\n' "$LIVE" | grep -v '^MP	')"
+market_note() {
+  [[ -n "$MARKETS" ]] || return 0
+  while IFS=$'\t' read -r _ name where; do
+    echo "STALE-MARKETPLACE: WARN - $name is a second brain-family marketplace registration ($where)"
+    echo "  No brain plugin is live from it, but a later enable brings back a shadow."
+    echo "  remove: claude plugin marketplace remove $name"
+    echo "  (and its extraKnownMarketplaces entry, if listed above; docs/migrate-to-agent-infra.md section C)"
+  done <<<"$MARKETS"
+}
 
 COUNT=0
 [[ -n "$LIVE" ]] && COUNT="$(printf '%s\n' "$LIVE" | grep -c .)"
@@ -105,12 +146,14 @@ COUNT=0
 if [[ "$COUNT" -eq 0 ]]; then
   echo "SHADOW-INSTALL: SKIPPED - no brain-family plugin recorded as installed or enabled"
   echo "  This machine may run the plugin from source (--plugin-dir), which cannot shadow." >&2
+  market_note
   exit 0
 fi
 
 if [[ "$COUNT" -eq 1 ]]; then
   IFS=$'\t' read -r key scope ver where <<<"$LIVE"
   echo "SHADOW-INSTALL: OK - one brain-family plugin live here: $key $ver ($scope scope)"
+  market_note
   exit 0
 fi
 
@@ -129,4 +172,5 @@ fi
   echo "  Keep ONE (normally the newest, user-scoped), uninstall the rest, then restart"
   echo "  the session. Doctor never uninstalls for you: this touches global config."
 } >&2
+market_note
 exit 1

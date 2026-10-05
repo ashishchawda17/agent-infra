@@ -128,10 +128,9 @@ update.
 claude plugin marketplace remove tray-brain-marketplace
 ```
 
-**`/brain:doctor` will not find this for you.** Check 12 counts installed and enabled plugins,
-not marketplace registrations, so an entry with no plugin enabled from it is invisible to it.
-Look for `tray-brain-marketplace` in `claude plugin marketplace list` (or under
-`extraKnownMarketplaces` in `~/.claude/settings.json`). Tracked as INNOV-336.
+`/brain:doctor` check 12 reports it as a `STALE-MARKETPLACE: WARN` advisory (INNOV-336)
+when a second brain-family marketplace is registered with no plugin live from it. If the
+entry also sits under `extraKnownMarketplaces` in a settings file, delete it there too.
 
 ## D. The vault's `repos.json` entry for the plugin repo
 
