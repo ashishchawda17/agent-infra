@@ -296,6 +296,25 @@ status="$(run_reap)"
 assert_eq "stale-index/remedy-unblocks-reap" "0" "$status"
 assert_eq "stale-index/on-main-after-remedy" "main" "$(cur_branch)"
 
+# A STAGED edit made after the commit, on a path the commit touched, also differs
+# from HEAD, but it is somebody's work, not a missed sync: resetting it would
+# drop it. The diagnosis must match the parent's content, not just the name.
+new_vault
+git -C "$VAULT" checkout -q -b "brain/save-2026-10-06" main
+printf 'saved\n' >>"$VAULT/logs/x.md"
+git -C "$VAULT" commit -q -am "the save" >/dev/null 2>&1
+printf 'staged later\n' >>"$VAULT/logs/x.md"
+git -C "$VAULT" add logs/x.md >/dev/null 2>&1
+staged_blob="$(git -C "$VAULT" ls-files -s logs/x.md)"
+status="$(run_reap)"
+err="$(cat "$BOX/err.txt")"
+assert_eq "staged-edit/exit-1" "1" "$status"
+case "$err" in
+  *"reset -q HEAD"*) fail "staged-edit/no-index-remedy" "offered a reset that would drop a staged edit" "$err" ;;
+  *)                 pass "staged-edit/no-index-remedy" ;;
+esac
+assert_eq "staged-edit/index-untouched" "$staged_blob" "$(git -C "$VAULT" ls-files -s logs/x.md)"
+
 # ================================================= detached HEAD => REFUSED ==
 new_vault
 git -C "$VAULT" checkout -q --detach main

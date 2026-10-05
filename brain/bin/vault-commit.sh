@@ -634,10 +634,16 @@ sync_index() {
   printf '%s\0' "${STAGED[@]}" | git --literal-pathspecs -C "$VAULT" \
     reset -q "$NEW" --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1 || return 1
 }
-for delay in 0 1 2 3 4 5; do
-  sleep "$delay"
+# Short polls, not long sleeps: the lock is not held between tries, and every
+# gap is a window in which a raw `git commit` would record the staged revert.
+# At least 6 tries even when each git call is slow (Windows process spawn).
+tries=0
+sync_until=$((SECONDS + 15))
+while :; do
   sync_index; sync_rc=$?
-  [[ $sync_rc -eq 1 ]] || break
+  tries=$((tries + 1))
+  [[ $sync_rc -eq 1 && ( $tries -lt 6 || $SECONDS -lt $sync_until ) ]] || break
+  sleep 0.5
 done
 [[ $sync_rc -eq 2 ]] &&
   echo "  NOTE: HEAD moved past this commit before the index sync; the index was left alone."

@@ -158,14 +158,22 @@ if [[ "$CUR_BRANCH" != "$DEFAULT" ]]; then
     # touched: edits as staged reverts, new files untracked. git's refusal then
     # reads as unrelated, so name it and print vault-commit.sh's own remedy.
     # --no-renames: a rename's source must be reset too, not just its destination.
-    # `git diff` takes no --pathspec-from-file, so diff the whole index and keep
-    # the paths HEAD touched (a newline-framed list; bash 3.2 has no hashes).
+    # A path counts only when its index entry is still exactly the parent's
+    # version (absent, for a file the commit added). A staged edit made AFTER the
+    # commit also differs from HEAD, and resetting it would drop that work.
+    # `git diff` takes no --pathspec-from-file, so diff the whole index and
+    # match names in newline-framed lists (bash 3.2 has no hashes).
+    parent="$(git -C "$VAULT" rev-parse -q --verify 'HEAD^' 2>/dev/null ||
+      git -C "$VAULT" hash-object -t tree --stdin </dev/null)"
     touched=$'\n'
+    not_parent=$'\n'
     stale=()
     while IFS= read -r -d '' p; do touched="$touched$p"$'\n'; done < <(
       git -C "$VAULT" diff-tree -r -z --name-only --no-renames --root --no-commit-id HEAD 2>/dev/null)
+    while IFS= read -r -d '' p; do not_parent="$not_parent$p"$'\n'; done < <(
+      git -C "$VAULT" diff --cached -z --name-only --no-renames "$parent" 2>/dev/null)
     while IFS= read -r -d '' p; do
-      [[ "$touched" == *$'\n'"$p"$'\n'* ]] && stale+=("$p")
+      [[ "$touched" == *$'\n'"$p"$'\n'* && "$not_parent" != *$'\n'"$p"$'\n'* ]] && stale+=("$p")
     done < <(git -C "$VAULT" diff --cached -z --name-only --no-renames HEAD 2>/dev/null)
     if [[ ${#stale[@]} -gt 0 ]]; then
       refuse "could not switch from '$CUR_BRANCH' to '$DEFAULT'" \
