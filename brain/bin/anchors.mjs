@@ -134,9 +134,13 @@ export const ENUMS = [
   ['status', ['current', 'superseded', 'falsified']],
 ];
 
-/** An enum field's value. A trailing YAML comment is not part of it (`#` after
- *  whitespace — so this cannot eat a `#anchor`). */
-export const enumValue = (raw) => raw.replace(/\s+#.*$/, '');
+/** A trailing YAML comment is not part of a value (`#` after whitespace — so
+ *  this cannot eat a `#anchor`). */
+export const stripComment = (raw) => raw.replace(/\s+#.*$/, '');
+
+/** An enum field's value: comment stripped, then one pair of matching quotes
+ *  (`status: "current"` is valid YAML for `current`, INNOV-365). */
+export const enumValue = (raw) => stripComment(raw).replace(/^(["'])(.*)\1$/, '$2');
 
 /**
  * Enum fields of one note's frontmatter that are outside their enum. Only
