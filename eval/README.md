@@ -4,20 +4,20 @@ The defensible **with/without measurement** that decides whether the brain earns
 This is **§17.1 checkbox 2** — the actual go/no-go for teams (checkbox 1, packaging/isolation, is met).
 
 > Not part of the distributable plugin — only `../brain/` is installed (marketplace `source: ./brain`).
-> This harness lives in the repo for convenience; its task content references internal Tray systems
-> and stays in the vendsy-internal repo.
+> This harness lives in the repo for convenience; its task content references internal systems
+> and stays in a private repo.
 
 ## The question
 
 > Does a shared, structured, provenance-tracked brain measurably improve agent output (correctness),
-> reduce token/time cost, and surface cross-repo knowledge the agent otherwise misses — on **real Tray
+> reduce token/time cost, and surface cross-repo knowledge the agent otherwise misses — on **real team
 > tasks**?
 
 ## Why a *real* repo (not the volleyball pilots) — §14.3
 
 Below ~100 notes a depth-2 graph query reaches almost everything (≈ "just read the index"), so the win
 is muted. The separation from grep shows at **hundreds+ of notes** and specifically on **cross-repo**
-and **code→rationale** tasks. **Run this on `hub` or `tray_pos_flutter`, not the small repos** — the
+and **code→rationale** tasks. **Run this on `hub` or `pos-app`, not the small repos** — the
 pilot already proves the mechanics; this proves the *value*.
 
 ## Conditions

@@ -311,7 +311,7 @@ assert_eq "missing-roots/verdict" "MISSING-ROOTS" "$(audit_verdict)" "output: [$
 assert_contains "missing-roots/names-the-empty-dir" "services/" "$(audit_all)"
 assert_contains "missing-roots/explains-invisibility" "invisible" "$(audit_all)"
 
-# The vendsy/hub frontend case, in miniature: the recorded row covered
+# The hub frontend case, in miniature: the recorded row covered
 # app/ components/ lib/ and the service layer, hooks and validation vanished.
 REPO_NEXT="$TMPROOT/repoNext"
 make_repo "$REPO_NEXT" app components lib services hooks validation providers constants types

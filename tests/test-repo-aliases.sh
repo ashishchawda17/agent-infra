@@ -6,13 +6,13 @@
 # covered repo sits DIRECTLY under one shared parent, and that its FOLDER NAME
 # equals its mirror name. Neither holds in the vault this plugin was built for:
 #
-#   store-hub  is the repo vendsy/edge, cloned as `edge/`        — name ≠ folder
+#   store-hub  is the repo acme/edge, cloned as `edge/`          — name ≠ folder
 #   KDS        is monorepo/android/applications/KDS              — not a direct child
 #   hub-*      are hub/frontend, hub/services/core-service, …    — both at once
 #
 # The failure is SILENT, which is what makes it worth a suite. When the flat
 # lookup misses, there is no source graph at the path it guessed, so the mirror
-# is simply not selected — indistinguishable from "nobody rebuilt it". tray-brain's
+# is simply not selected — indistinguishable from "nobody rebuilt it". team-vault's
 # store-hub mirror sat unsyncable this way. Test 5 is the negative control that
 # pins it: the same fixture, minus repos.json, must NOT sync.
 #
@@ -127,7 +127,7 @@ new_alias_sandbox() {
   # remote to verify against, which keeps the fixture free of extra git clones.
   printf '{"repos":{"store-hub":{}}}\n' >"$v/repos.json"
   # repos.local.json holds NATIVE paths — on Windows that is `C:/Users/...`, which
-  # is what the real tray-brain vault contains and what Windows node can actually
+  # is what the real team vault contains and what Windows node can actually
   # stat. Writing the Git Bash `/tmp/...` form here would make node's existsSync
   # fail and the alias silently not resolve. cygpath is absent off Windows, where
   # the POSIX path is already native.

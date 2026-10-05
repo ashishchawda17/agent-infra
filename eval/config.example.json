@@ -3,14 +3,14 @@
   "claudeBin": "claude",
   "repos": {
     "hub": "/c/Users/you/Projects/hub",
-    "tray_pos_flutter": "/c/Users/you/Projects/tray_pos_flutter"
+    "pos-app": "/c/Users/you/Projects/pos-app"
   },
   "conditions": {
     "baseline": { "claudeArgs": [], "env": {} },
     "treatment": {
       "//": "Brain present: load the plugin + point at the graphified vault. The target repo must already have graphify-out/ and a mirror in the vault.",
       "claudeArgs": ["--plugin-dir", "../brain"],
-      "env": { "BRAIN_ROOT": "/c/Users/you/Projects/tray-brain" }
+      "env": { "BRAIN_ROOT": "/c/Users/you/Projects/team-vault" }
     }
   }
 }
