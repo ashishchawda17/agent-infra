@@ -657,8 +657,11 @@ done
 # last-started id, which may be another session that started on the same sha.
 # Same precedence as session.sh, whose sanitize_id empties a value with no
 # [A-Za-z0-9._] character — and an emptied id falls back the same way.
+# Not once the sync saw HEAD move past this commit (sync_rc 2): the pin stays at
+# the pre-commit sha, so the next pinned commit refuses that foreign move, and a
+# caller repinning before -> HEAD itself (runtime.mjs) is not refused.
 sid="${BRAIN_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}"
-if [[ "$sid" =~ [A-Za-z0-9._] && -f "$VAULT/.brain/session.json" ]] &&
+if [[ $sync_rc -ne 2 && "$sid" =~ [A-Za-z0-9._] && -f "$VAULT/.brain/session.json" ]] &&
    ! BRAIN_ROOT="$VAULT" bash "$BIN_DIR/session.sh" --repin "$CUR_SHA" "$NEW" >/dev/null 2>&1; then
   echo "  NOTE: the session pin was NOT updated to this commit (it did not record the"
   echo "        pre-commit sha); a later --print-pin commit will be refused as HEAD moved."

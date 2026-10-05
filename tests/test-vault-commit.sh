@@ -1288,6 +1288,21 @@ assert_eq "repin-foreign/second-commit-refused" "1" "$STATUS" "$(evidence)"
 assert_eq "repin-foreign/head-unmoved" "$foreign" "$(head_sha)" "$(evidence)"
 assert_eq "repin-foreign/pin-not-adopted" "$mine" "$(p="$(recorded_pin)"; echo "${p#*:}")" "$(evidence)"
 
+# --- 48b. a foreign commit right after this run's ref update: no repin -------
+# The sync sees HEAD past this commit, so the pin must stay at the pre-commit
+# sha; repinning to this commit would make runtime.mjs's own before->HEAD repin
+# refuse and report a landed commit as a failure.
+sb_new "main"
+BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$SESSION_SH" --start save >/dev/null 2>&1
+pin_start="$(recorded_pin)"
+make_dirty
+make_git_wrap "echo newer >>wiki/hot.md && '$REAL_GIT' add wiki/hot.md && '$REAL_GIT' commit -qm newer" "update-ref" after
+(export BRAIN_SESSION_ID="$SID"; run_guard -m "save" --pin "$pin_start")
+GIT_WRAP=""
+assert_eq "repin-race/wrapper-fired" "yes" "$([[ -f "$BOX/wrap/fired" ]] && echo yes)" "$(evidence)"
+assert_eq "repin-race/foreign-is-head" "newer" "$(head_subject)" "$(evidence)"
+assert_eq "repin-race/pin-not-advanced" "$pin_start" "$(recorded_pin)" "$(evidence)"
+
 # --- 49. no explicit session id => no repin ---------------------------------
 # Without BRAIN_SESSION_ID / CLAUDE_CODE_SESSION_ID, session.sh resolves the
 # last-started id, which can be ANOTHER session that started on the same sha:
