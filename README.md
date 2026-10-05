@@ -109,7 +109,8 @@ Each branch adds a bump fragment instead, `.bumps/brain/<ticket>` containing `pa
    version, regenerates the host manifests, and deletes the fragments. It then opens or refreshes the PR
    and dispatches CI on it. To run it by hand, use `node tools/bump-version.mjs brain` on a branch.
    Until the PR merges, merged `brain/` changes are on `main`, but installs do not pick them up.
-2. Merge the release PR once its `tests` checks are green.
+2. Merge the release PR once the dispatched CI run is green on both runners. The PR body links to the
+   run; a dispatched run does not appear in the PR's own checks.
 3. Tag the **merge commit**, after the merge: `git tag brain--v<version> <merge-sha>`, then push the
    tag. Tag the commit `main` points to, not the release branch's commit.
 4. Push the mirror by URL, fast-forward only. Check `git merge-base --is-ancestor <old-mirror-head> main`

@@ -5,7 +5,8 @@ on:
     branches: [main]
   pull_request:
   # release-pr.yml dispatches this on release/<plugin>: its GITHUB_TOKEN PR
-  # starts no pull_request run, so this is how a release SHA gets checks.
+  # starts no pull_request run, so this is how a release SHA gets tested.
+  # The run does not attach to the PR; the release PR body links to it.
   workflow_dispatch:
 
 jobs:

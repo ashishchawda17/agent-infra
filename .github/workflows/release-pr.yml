@@ -24,6 +24,8 @@ concurrency:
 
 jobs:
   release-pr:
+    # A manual run from another branch would publish that branch as a release.
+    if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

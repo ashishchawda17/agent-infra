@@ -6,7 +6,8 @@
 # the current HEAD plus one commit that runs tools/bump-version.mjs, force-push
 # it, create the PR (or edit the open one), and dispatch ci.yml on the branch:
 # a GITHUB_TOKEN push or PR starts no push/pull_request workflows, but a
-# workflow_dispatch does, so the release SHA gets real checks before merge.
+# workflow_dispatch does, so the release SHA is tested before merge. A
+# dispatched run does not show in the PR's checks, so the body links to it.
 #
 # The branch name carries no version: a later minor fragment changes the
 # version, and a versioned name would open a second PR. No fragments: exit 0
@@ -62,13 +63,16 @@ for p in $plugins; do
   title="$(git log -1 --format=%s "$branch")"
   frags="$(git diff --name-only --diff-filter=D "$BASE" "$branch" -- ".bumps/$p/" | sed "s|^\.bumps/$p/||")"
   git push -q --force origin "$branch:refs/heads/$branch"
+  runs="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/workflows/ci.yml?query=branch%3Arelease%2F$p"
 
   body="$(cat <<EOF
 Automated by \`.github/workflows/release-pr.yml\` (INNOV-330): \`node tools/bump-version.mjs $p\` applied these pending fragments:
 
 $(printf '%s\n' "$frags" | sed 's/^/- /')
 
-CI is dispatched on this branch (a \`GITHUB_TOKEN\` PR starts no \`pull_request\` checks). Merge once \`tests\` is green on both runners. After merging:
+**Checks are not on this PR.** A \`GITHUB_TOKEN\` PR starts no \`pull_request\` run, so CI is dispatched on the branch instead, and a dispatched run does not attach to the PR. Merge once \`tests\` is green on both runners here: $runs
+
+After merging:
 1. Tag the **merge commit**, not this branch's commit.
 2. Push the \`vendsy/agent-infra\` mirror by URL, fast-forward only.
 

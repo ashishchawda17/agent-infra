@@ -123,6 +123,7 @@ assert_contains "brain/pr-created" "$log" "pr create"
 assert_contains "brain/pr-title-has-version" "$log" "0.3.9"
 assert_contains "brain/pr-body-names-fragment" "$log" "INNOV-1"
 assert_eq "brain/one-create" "1" "$(grep -c '^pr create' "$GH_LOG")"
+assert_contains "brain/pr-body-links-ci-runs" "$log" "actions/workflows/ci.yml?query=branch%3Arelease%2Fbrain"
 assert_eq "brain/ci-dispatched" "1" "$(grep -c '^workflow run ci.yml --ref release/brain' "$GH_LOG")"
 
 echo "--- 3. rerun with the PR open: branch rebuilt on new main, PR edited, no second PR ---"
@@ -226,6 +227,8 @@ CI="$REPO_ROOT/.github/workflows/ci.yml"
 REL="$REPO_ROOT/.github/workflows/release-pr.yml"
 assert_eq "ci/workflow-dispatch" "1" "$(grep -c '^  workflow_dispatch:' "$CI")"
 assert_eq "release/paths-bumps" "1" "$(grep -c "'.bumps/\*\*'" "$REL")"
+# A manual dispatch from a feature branch must not publish that branch as a release.
+assert_eq "release/main-only" "1" "$(grep -c "if: github.ref == 'refs/heads/main'" "$REL")"
 assert_eq "release/runs-script" "1" "$(grep -c 'bash tools/release-pr.sh' "$REL")"
 
 echo
