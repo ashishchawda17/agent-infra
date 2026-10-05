@@ -22,10 +22,11 @@
 # HEAD. Only /brain:save step 6b calls this, after its commit.
 #
 # WHAT IT WILL NOT DO (the properties that make it safe to run unattended):
-#   - `git branch -d` ONLY, never -D. Lowercase -d refuses to delete a branch that
-#     is not fully merged, so this cannot drop unmerged work. That is git's own
-#     guarantee, not a check written here. A refusal is reported and the branch
-#     stays.
+#   - A branch is deleted only when `git merge-base --is-ancestor` says it is in
+#     the default branch, and then with `git branch -d`, never -D. -d alone is not
+#     enough: once a branch has an upstream (any `push -u`), git checks it against
+#     origin/<branch>, which equals the branch right after a push, so -d deletes
+#     pushed-but-unmerged work (INNOV-379). A kept branch is reported and stays.
 #   - Never a forced checkout. If `git switch` will not proceed, git says so and we
 #     stop, having changed nothing.
 #   - Never runs while ANOTHER session is live in this checkout. HEAD and the index
@@ -175,13 +176,15 @@ if git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/origin/$DEFAULT" >/d
 fi
 
 # --- 5. reap the merged brain/* branches ------------------------------------
-# -d, never -D: git itself refuses anything not fully merged into HEAD (now the
-# default branch), so unmerged work cannot be lost here.
+# The ancestor check is the guard, against the default branch explicitly: -d
+# compares against the branch's UPSTREAM when it has one, not HEAD (INNOV-379).
+# -d, never -D, stays as the second lock.
 DELETED=()
 KEPT=()
 while IFS= read -r branch; do
   [[ -n "$branch" && "$branch" != "$DEFAULT" ]] || continue
-  if git -C "$VAULT" branch -d "$branch" >/dev/null 2>&1; then
+  if git -C "$VAULT" merge-base --is-ancestor "$branch" "$DEFAULT" 2>/dev/null &&
+     git -C "$VAULT" branch -d "$branch" >/dev/null 2>&1; then
     DELETED+=("$branch")
   else
     KEPT+=("$branch")
@@ -198,7 +201,7 @@ if [[ ${#DELETED[@]} -gt 0 ]]; then
   printf '    %s\n' "${DELETED[@]}"
 fi
 if [[ ${#KEPT[@]} -gt 0 ]]; then
-  echo "  KEPT — 'git branch -d' refused them, so the work is intact:"
+  echo "  KEPT — not merged into '$DEFAULT' (or 'git branch -d' refused), so the work is intact:"
   # One line per kept branch, so unmerged work is a finding rather than a name in a
   # list (INNOV-309: two kept branches in one vault held 9 trusted notes and a log
   # that had reached main by no other route, and nothing ever said so). "Absent"
@@ -230,6 +233,18 @@ if [[ ${#KEPT[@]} -gt 0 ]]; then
       line="$line (this save's branch, not landed yet)"
     elif [[ $absent -gt 0 ]]; then
       line="$line — POSSIBLE LOST WORK: it reached '$DEFAULT' by no other route"
+    fi
+    # Pushed? Say where the work is. The PR lookup is best-effort: no gh, no auth,
+    # offline or a non-GitHub remote all just drop the PR half of the note.
+    upstream="$(git -C "$VAULT" for-each-ref --format='%(upstream:short)' "refs/heads/$branch" 2>/dev/null)"
+    if [[ -n "$upstream" ]] && git -C "$VAULT" rev-parse --verify --quiet "refs/remotes/$upstream" >/dev/null 2>&1; then
+      line="$line; pushed to $upstream"
+      pr=""
+      if command -v gh >/dev/null 2>&1; then
+        pr="$(cd "$VAULT" 2>/dev/null && gh pr list --head "$branch" --state open               --json url --jq '.[0].url' 2>/dev/null || true)"
+        pr="${pr//[[:space:]]/}"
+      fi
+      [[ -n "$pr" ]] && line="$line, open PR $pr"
     fi
     echo "$line"
   done
