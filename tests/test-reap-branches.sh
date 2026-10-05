@@ -262,6 +262,39 @@ assert_eq "dirty/exit-1" "1" "$status"
 assert_contains "dirty/refused-line" "$err" "REAP: REFUSED - could not switch"
 assert_eq "dirty/branch-unchanged" "$before_branch" "$(cur_branch)"
 assert_eq "dirty/worktree-unchanged" "$before_file" "$(cat "$VAULT/logs/x.md")"
+# Negative control for the case below: the index matches HEAD here, so the
+# missed-sync diagnosis must not fire on an ordinary worktree change.
+case "$err" in
+  *"reset -q HEAD"*) fail "dirty/no-index-remedy" "printed the index-sync remedy for a worktree change" "$err" ;;
+  *)                 pass "dirty/no-index-remedy" ;;
+esac
+
+# ============== a missed vault-commit index sync => REFUSED, with the remedy ==
+# INNOV-377: vault-commit.sh's post-commit sync lost to a held index.lock, so the
+# shared index kept the pre-commit versions of the committed paths (a modified
+# one as a staged revert, a new one untracked). git's own refusal ("untracked
+# working tree files would be removed") does not say why; the reap must.
+new_vault
+git -C "$VAULT" checkout -q -b "brain/save-2026-10-04" main
+printf 'saved\n' >>"$VAULT/logs/x.md"
+printf 'a new log\n' >"$VAULT/logs/new.md"
+git -C "$VAULT" add -A >/dev/null 2>&1
+git -C "$VAULT" commit -qm "the save" >/dev/null 2>&1
+git -C "$VAULT" reset -q HEAD~ -- logs/x.md logs/new.md   # the sync that never landed
+
+status="$(run_reap)"
+err="$(cat "$BOX/err.txt")"
+assert_eq "stale-index/exit-1" "1" "$status"
+assert_contains "stale-index/refused-line" "$err" "REAP: REFUSED - could not switch"
+assert_contains "stale-index/says-why" "$err" "index sync"
+assert_contains "stale-index/names-new-file" "$err" "logs/new.md"
+assert_eq "stale-index/branch-unchanged" "brain/save-2026-10-04" "$(cur_branch)"
+remedy="$(printf '%s\n' "$err" | grep 'reset -q HEAD --' | tail -n 1)"
+assert_contains "stale-index/remedy-printed" "$remedy" "reset -q HEAD --"
+eval "$remedy"
+status="$(run_reap)"
+assert_eq "stale-index/remedy-unblocks-reap" "0" "$status"
+assert_eq "stale-index/on-main-after-remedy" "main" "$(cur_branch)"
 
 # ================================================= detached HEAD => REFUSED ==
 new_vault

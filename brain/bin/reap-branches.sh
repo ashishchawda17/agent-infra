@@ -153,6 +153,29 @@ git -C "$VAULT" fetch --prune origin >/dev/null 2>&1 || true
 SWITCHED_FROM="$CUR_BRANCH"
 if [[ "$CUR_BRANCH" != "$DEFAULT" ]]; then
   if ! sw_err="$(git -C "$VAULT" switch "$DEFAULT" 2>&1)"; then
+    # A save whose post-commit index sync lost to a held lock (INNOV-377) leaves
+    # the shared index at the pre-commit versions of the paths HEAD's commit
+    # touched: edits as staged reverts, new files untracked. git's refusal then
+    # reads as unrelated, so name it and print vault-commit.sh's own remedy.
+    # --no-renames: a rename's source must be reset too, not just its destination.
+    # `git diff` takes no --pathspec-from-file, so diff the whole index and keep
+    # the paths HEAD touched (a newline-framed list; bash 3.2 has no hashes).
+    touched=$'\n'
+    stale=()
+    while IFS= read -r -d '' p; do touched="$touched$p"$'\n'; done < <(
+      git -C "$VAULT" diff-tree -r -z --name-only --no-renames --root --no-commit-id HEAD 2>/dev/null)
+    while IFS= read -r -d '' p; do
+      [[ "$touched" == *$'\n'"$p"$'\n'* ]] && stale+=("$p")
+    done < <(git -C "$VAULT" diff --cached -z --name-only --no-renames HEAD 2>/dev/null)
+    if [[ ${#stale[@]} -gt 0 ]]; then
+      refuse "could not switch from '$CUR_BRANCH' to '$DEFAULT'" \
+        "  The shared index still holds the pre-commit versions of ${#stale[@]} path(s) the" \
+        "  last commit on '$CUR_BRANCH' touched: vault-commit.sh's post-commit index sync" \
+        "  did not land (usually a held index.lock). Nothing was changed. Run, then re-run:" \
+        "$(printf '    git -C %q reset -q HEAD --' "$VAULT"; printf ' %q' "${stale[@]}")" \
+        "  git said:" \
+        "$(printf '    %s\n' "$sw_err")"
+    fi
     refuse "could not switch from '$CUR_BRANCH' to '$DEFAULT'" \
       "$(printf '    %s\n' "$sw_err")" \
       "  Nothing was changed, and nothing was forced: your work is still on" \
