@@ -110,11 +110,11 @@ done
 if [ "$TRACKER" = jira ]; then
   QUEUE="project = $PROJECT AND labels = $LABEL AND labels = agent-ready AND statusCategory = \"To Do\" AND assignee IS EMPTY ORDER BY priority DESC"
   FILE_TO="Jira project $PROJECT, label $LABEL"
-  EXTRA="WAVE_JIRA_SITE=$SITE"
+  EXTRA="WAVE_JIRA_SITE='$SITE'"
 else
   QUEUE="team $PROJECT, state Backlog, label $LABEL, label agent-ready, unassigned"
   FILE_TO="Linear team $PROJECT, label $LABEL"
-  EXTRA="WAVE_LINEAR_TEAM=$PROJECT"
+  EXTRA="WAVE_LINEAR_TEAM='$PROJECT'"
 fi
 
 mkdir -p "$(dirname "$CONFIG")"

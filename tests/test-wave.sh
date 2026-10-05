@@ -222,7 +222,7 @@ assert_contains "boot-jira/prints-config" "$(cat "$BOX/boot.txt")" "WAVE_TRACKER
 assert_contains "boot-jira/says-commit" "$(cat "$BOX/boot.txt")" "commit"
 cfg="$(cat "$(CFG)")"
 assert_contains "boot-jira/queue" "$cfg" "WAVE_QUEUE='project = INNOV AND labels = brain-plugin AND labels = agent-ready AND statusCategory = \"To Do\" AND assignee IS EMPTY ORDER BY priority DESC'"
-assert_contains "boot-jira/site" "$cfg" "WAVE_JIRA_SITE=vendsy.atlassian.net"
+assert_contains "boot-jira/site" "$cfg" "WAVE_JIRA_SITE='vendsy.atlassian.net'"
 assert_contains "boot-jira/default-done" "$cfg" "WAVE_STATE_DONE='Validate'"
 assert_contains "boot-jira/file-to" "$cfg" "WAVE_FILE_TO='Jira project INNOV, label brain-plugin'"
 st="$(spawn_dry)"
@@ -234,7 +234,7 @@ new_sandbox ""
 new_vault '{\r\n  "tracker": { "type": "jira", "project": "INNOV", "site": "vendsy.atlassian.net" }\r\n}\r\n'
 st="$(boot BRAIN_ROOT="$VAULT" bash "$WAVE/bootstrap.sh" --label brain-plugin)"
 assert_eq "boot-crlf/exit-0" "0" "$st"
-assert_contains "boot-crlf/site-no-cr" "$(cat "$(CFG)")" "WAVE_JIRA_SITE=vendsy.atlassian.net
+assert_contains "boot-crlf/site-no-cr" "$(cat "$(CFG)")" "WAVE_JIRA_SITE='vendsy.atlassian.net'
 "
 assert_eq "boot-crlf/lib-accepts" "0" "$(spawn_dry)"
 
@@ -245,7 +245,7 @@ st="$(boot BRAIN_ROOT="$VAULT" bash "$WAVE/bootstrap.sh" --label sports)"
 assert_eq "boot-linear/exit-0" "0" "$st"
 cfg="$(cat "$(CFG)")"
 assert_contains "boot-linear/queue" "$cfg" "WAVE_QUEUE='team SPO, state Backlog, label sports, label agent-ready, unassigned'"
-assert_contains "boot-linear/team" "$cfg" "WAVE_LINEAR_TEAM=SPO"
+assert_contains "boot-linear/team" "$cfg" "WAVE_LINEAR_TEAM='SPO'"
 assert_contains "boot-linear/default-done" "$cfg" "WAVE_STATE_DONE='In Review'"
 assert_not_contains "boot-linear/no-site" "$cfg" "WAVE_JIRA_SITE"
 st="$(spawn_dry)"
@@ -280,6 +280,11 @@ echo "--- 20. bootstrap: a quote or newline in a value is refused ---"
 st="$(boot BRAIN_ROOT="$VAULT" bash "$WAVE/bootstrap.sh" --site s --label "x'; touch pwned; '")"
 assert_eq "boot-quote/exit-1" "1" "$st"
 if [[ ! -e "$(CFG)" ]]; then pass "boot-quote/no-write"; else fail "boot-quote/no-write" "config.env was written"; fi
+# negative control for the quoting: a metacharacter in the site must stay data when lib.sh sources it
+boot BRAIN_ROOT="$VAULT" bash "$WAVE/bootstrap.sh" --label x --site 'a.atlassian.net;touch$IFS"pwned"' >/dev/null
+spawn_dry >/dev/null
+if [[ ! -e "$BOX/pwned" ]]; then pass "boot-metachar/not-executed"; else fail "boot-metachar/not-executed" "lib.sh ran code from the site value"; fi
+assert_contains "boot-metachar/kept-as-data" "$(cat "$BOX/out.txt")" 'a.atlassian.net;touch$IFS"pwned"'
 
 echo "--- 21. bootstrap: .brain/config.json binding resolves via the registry ---"
 new_sandbox ""
@@ -289,7 +294,7 @@ printf '{"version":1,"vault":"abc123"}\n' >"$BOX/.brain/config.json"
 printf '{"version":1,"vaults":[{"id":"abc123","path":"%s"}]}\n' "$(cygpath -m "$VAULT" 2>/dev/null || echo "$VAULT")" >"$BRAIN_HOME/registry.json"
 st="$(boot bash "$WAVE/bootstrap.sh" --label sports)"
 assert_eq "boot-binding/exit-0" "0" "$st"
-assert_contains "boot-binding/team" "$(cat "$(CFG)" 2>/dev/null)" "WAVE_LINEAR_TEAM=SPO"
+assert_contains "boot-binding/team" "$(cat "$(CFG)" 2>/dev/null)" "WAVE_LINEAR_TEAM='SPO'"
 
 echo "--- 22. bootstrap: an existing config.env is byte-identical ---"
 new_sandbox ""
