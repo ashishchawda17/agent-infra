@@ -136,7 +136,7 @@ market_note() {
     echo "STALE-MARKETPLACE: WARN - $name is a second brain-family marketplace registration ($where)"
     echo "  No brain plugin is live from it, but a later enable brings back a shadow."
     echo "  remove: claude plugin marketplace remove $name"
-    echo "  (and its extraKnownMarketplaces entry, if listed above; docs/migrate-to-agent-infra.md section C)"
+    echo "  (and its extraKnownMarketplaces entry, if listed above)"
   done <<<"$MARKETS"
 }
 
