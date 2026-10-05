@@ -57,6 +57,14 @@ for p in $plugins; do
 done
 git checkout -q --detach "$BASE"
 
+# A queued older run, or a re-run of an old job, must not publish from a main
+# that has moved on: it could resurrect a fragment a later commit withdrew.
+git fetch -q origin main
+if [ "$(git rev-parse FETCH_HEAD)" != "$BASE" ]; then
+  echo "release-pr: $BASE is no longer the tip of origin/main — the run for the newer commit releases it."
+  exit 0
+fi
+
 # Phase 2: publish.
 for p in $plugins; do
   branch="release/$p"

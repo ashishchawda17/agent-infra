@@ -225,7 +225,26 @@ assert_contains "unmoved/says-so" "$OUT" "did not change"
 assert_eq "unmoved/no-branch" "no" "$(has_branch release/brain)"
 assert_eq "unmoved/no-gh-calls" "" "$(cat "$GH_LOG")"
 
-echo "--- 11. workflows: CI is dispatchable; release runs only on fragment changes ---"
+echo "--- 11. a run whose commit is no longer the tip of origin/main publishes nothing ---"
+# A queued older run, or a re-run of an old job, must not rebuild release/<p>
+# from a stale main (and so resurrect a fragment a later commit withdrew).
+new_sandbox
+add_fragment brain INNOV-12 'patch
+'
+git -C "$BOX" push -q -f origin main
+stale="$(git -C "$BOX" rev-parse main)"
+git -C "$BOX" rm -q ".bumps/brain/INNOV-12"
+git -C "$BOX" commit -q -m "withdraw fragment"
+git -C "$BOX" push -q origin main
+git -C "$BOX" checkout -q --detach "$stale"
+OUT="$(cd "$BOX" && PATH="$STUB:$PATH" GH_LOG="$GH_LOG" GH_OPEN_PR="" bash tools/release-pr.sh 2>&1)"
+ST=$?
+assert_eq "stale/exit-0" "0" "$ST"
+assert_contains "stale/says-so" "$OUT" "no longer the tip of origin/main"
+assert_eq "stale/no-branch" "no" "$(has_branch release/brain)"
+assert_eq "stale/no-gh-calls" "" "$(cat "$GH_LOG")"
+
+echo "--- 12. workflows: CI is dispatchable; release runs only on fragment changes ---"
 CI="$REPO_ROOT/.github/workflows/ci.yml"
 REL="$REPO_ROOT/.github/workflows/release-pr.yml"
 assert_eq "ci/workflow-dispatch" "1" "$(grep -c '^  workflow_dispatch:' "$CI")"
