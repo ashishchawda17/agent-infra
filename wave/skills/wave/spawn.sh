@@ -124,7 +124,9 @@ $REVIEW_LOOP
    summary when they exist.
 5. Open the PR against $BASE_BRANCH, $TRACKER_ATTACH, set the issue $WAVE_STATE_DONE.
 6. File follow-ups to $WAVE_FILE_TO, but only if you OBSERVED them - they broke on real data, a real repo, or
-   a real run - or your own diff makes them worse. A gap that is only possible (no
+   a real run - or your own diff makes them worse. They go there,
+   never to the host's or any vendor's feedback or bug-report channel: the content
+   is internal, and the vendor cannot act on it. A gap that is only possible (no
    known instance, not reproduced, a hypothetical input) is not a ticket: write it
    in the PR body as
      NOT FILED: <finding> - <why no instance exists> - <where it lives, file:line>
