@@ -1300,6 +1300,16 @@ make_dirty
 assert_ne "repin-anon/committed" "${pin_start#*:}" "$(head_sha)" "$(evidence)"
 assert_eq "repin-anon/pin-untouched" "$pin_start" \
   "$(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --print-pin 2>/dev/null | sed -n 's/^  pin: //p' | tr -d '\r')" "$(evidence)"
+# ...nor with an id session.sh sanitizes to empty: it falls back the same way,
+# even when CLAUDE_CODE_SESSION_ID is valid (BRAIN_SESSION_ID wins when set).
+sb_new "main"
+(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --start save >/dev/null 2>&1)
+pin_start="$(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --print-pin 2>/dev/null | sed -n 's/^  pin: //p' | tr -d '\r')"
+make_dirty
+(export BRAIN_SESSION_ID='!' CLAUDE_CODE_SESSION_ID="$SID"; run_guard -m "sanitized-away id" --pin "$pin_start")
+assert_ne "repin-anon/sanitized-id-committed" "${pin_start#*:}" "$(head_sha)" "$(evidence)"
+assert_eq "repin-anon/sanitized-id-pin-untouched" "$pin_start" \
+  "$(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --print-pin 2>/dev/null | sed -n 's/^  pin: //p' | tr -d '\r')" "$(evidence)"
 
 # ------------------------------------------------------------------ done ---
 echo

@@ -655,7 +655,10 @@ done
 # pin only when it still records $CUR_SHA, so a foreign move is never adopted.
 # Only with an explicit session id: without one session.sh falls back to the
 # last-started id, which may be another session that started on the same sha.
-if [[ -n "${BRAIN_SESSION_ID:-}${CLAUDE_CODE_SESSION_ID:-}" && -f "$VAULT/.brain/session.json" ]] &&
+# Same precedence as session.sh, whose sanitize_id empties a value with no
+# [A-Za-z0-9._] character — and an emptied id falls back the same way.
+sid="${BRAIN_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}"
+if [[ "$sid" =~ [A-Za-z0-9._] && -f "$VAULT/.brain/session.json" ]] &&
    ! BRAIN_ROOT="$VAULT" bash "$BIN_DIR/session.sh" --repin "$CUR_SHA" "$NEW" >/dev/null 2>&1; then
   echo "  NOTE: the session pin was NOT updated to this commit (it did not record the"
   echo "        pre-commit sha); a later --print-pin commit will be refused as HEAD moved."
