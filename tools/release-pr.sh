@@ -85,7 +85,7 @@ After merging:
 1. Tag the **merge commit**, not this branch's commit.
 2. Push the \`vendsy/agent-infra\` mirror by URL, fast-forward only.
 
-This branch is rebuilt from \`main\` whenever \`.bumps/\` changes there, so hand edits here are overwritten. To hold a release, leave this PR open. Closing it opens a fresh one on the next fragment push.
+This branch is rebuilt from \`main\` on every push there, so hand edits here are overwritten. To hold a release, leave this PR open. Closing it opens a fresh one on the next push to \`main\`.
 EOF
 )"
   # --head matches the branch name only; a fork can open a PR from its own

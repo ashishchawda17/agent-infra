@@ -103,7 +103,7 @@ keep in sync. Feature branches do **not** edit `version` — parallel PRs all co
 Each branch adds a bump fragment instead, `.bumps/brain/<ticket>` containing `patch`, `minor` or
 `major`; the CI version-bump check accepts it. On every release:
 
-1. **The bump PR opens itself.** When a push to `main` changes `.bumps/`, `.github/workflows/release-pr.yml`
+1. **The bump PR opens itself.** On every push to `main`, `.github/workflows/release-pr.yml`
    runs `tools/release-pr.sh`. For each plugin with pending fragments it rebuilds a `release/<plugin>`
    branch: current `main` plus one `node tools/bump-version.mjs <plugin>` commit, which bumps the
    version, regenerates the host manifests, and deletes the fragments. It then opens or refreshes the PR
@@ -111,10 +111,10 @@ Each branch adds a bump fragment instead, `.bumps/brain/<ticket>` containing `pa
    Until the PR merges, merged `brain/` changes are on `main`, but installs do not pick them up.
 2. Merge the release PR once the dispatched CI run is green on both runners. The PR body links to the
    run; a dispatched run does not appear in the PR's own checks.
-3. Tag the **merge commit**, after the merge: `git tag brain--v<version> <merge-sha>`, then push the
+3. Tag the **merge commit**, after the merge: `git tag brain--vX.Y.Z MERGE_SHA`, then push the
    tag. Tag the commit `main` points to, not the release branch's commit.
-4. Push the mirror by URL, fast-forward only. Check `git merge-base --is-ancestor <old-mirror-head> main`
-   first, then `git push https://github.com/vendsy/agent-infra.git main:main <tags>`. Never force.
+4. Push the mirror by URL, fast-forward only. Check `git merge-base --is-ancestor OLD_MIRROR_HEAD main`
+   first, then `git push https://github.com/vendsy/agent-infra.git main:main brain--vX.Y.Z`, listing every new tag. Never force.
 
 One-time repo setting the workflow needs: *Settings → Actions → General → Allow GitHub Actions to
 create and approve pull requests.* It applies repo-wide; only `release-pr.yml` requests

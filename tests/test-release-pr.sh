@@ -244,11 +244,13 @@ assert_contains "stale/says-so" "$OUT" "no longer the tip of origin/main"
 assert_eq "stale/no-branch" "no" "$(has_branch release/brain)"
 assert_eq "stale/no-gh-calls" "" "$(cat "$GH_LOG")"
 
-echo "--- 12. workflows: CI is dispatchable; release runs only on fragment changes ---"
+echo "--- 12. workflows: CI is dispatchable; every main push queues a release run ---"
 CI="$REPO_ROOT/.github/workflows/ci.yml"
 REL="$REPO_ROOT/.github/workflows/release-pr.yml"
 assert_eq "ci/workflow-dispatch" "1" "$(grep -c '^  workflow_dispatch:' "$CI")"
-assert_eq "release/paths-bumps" "1" "$(grep -c "'.bumps/\*\*'" "$REL")"
+# Case 11's guard defers to the run for the newer commit; a paths filter would
+# mean that run never starts after a docs-only push.
+assert_eq "release/no-paths-filter" "0" "$(grep -c '^ *paths' "$REL")"
 # A manual dispatch from a feature branch must not publish that branch as a release.
 assert_eq "release/main-only" "1" "$(grep -c "if: github.ref == 'refs/heads/main'" "$REL")"
 assert_eq "release/runs-script" "1" "$(grep -c 'bash tools/release-pr.sh' "$REL")"

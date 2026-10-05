@@ -9,8 +9,9 @@ name: release PR
 # create and approve pull requests". Without it `gh pr create` returns 403.
 on:
   push:
+    # No paths filter: release-pr.sh steps aside when main has moved past its
+    # commit, which is only safe if every push to main queues a run.
     branches: [main]
-    paths: ['.bumps/**']
   workflow_dispatch:
 
 permissions:
