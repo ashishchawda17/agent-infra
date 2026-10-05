@@ -1233,6 +1233,99 @@ run_guard -m "no change" --pin "brain/work:$before" --pr-paths wiki/hot.md
 assert_eq "pr-paths/no-change-refused" "1" "$STATUS" "$(evidence)"
 assert_contains "pr-paths/no-change-reason" "no changes" "$(out_all)" "$(evidence)"
 
+# --- 47. INNOV-380: a commit advances this session's own pin -----------------
+# A save that needs a second commit (a hot.md budget trim) re-reads the pin with
+# --print-pin. Before the fix the record still held the pre-commit sha, so the
+# session's own first commit read as "HEAD moved" and the second was refused.
+SESSION_SH="$REPO_ROOT/brain/bin/session.sh"
+SID="vc-sess-380"
+run_guard_sid() { # [args...] — run_guard under this session's identity
+  (
+    cd "$VAULT" || exit 127
+    unset CLAUDE_PROJECT_DIR
+    export PATH="$GH_NONE:$PATH"
+    BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$GUARD" "$@"
+  ) >"$BOX/out.txt" 2>"$BOX/err.txt"
+  STATUS=$?
+}
+recorded_pin() {
+  BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$SESSION_SH" --print-pin 2>/dev/null \
+    | sed -n 's/^  pin: //p' | head -n 1 | tr -d '\r'
+}
+
+recorded_pid() { grep -o '"pid": [0-9]*' "$VAULT/.brain/session.json" 2>/dev/null | head -n 1; }
+
+sb_new "main"
+BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$SESSION_SH" --start save >/dev/null 2>&1
+pid_start="$(recorded_pid)"
+make_dirty
+run_guard_sid -m "save" --pin "$(recorded_pin)"
+assert_eq "repin/first-commit-ok" "0" "$STATUS" "$(evidence)"
+# The repin runs in vault-commit's short-lived shell; recording THAT pid would let
+# the pid reap (Linux/macOS) read the still-running save as a dead session.
+assert_eq "repin/start-pid-kept" "$pid_start" "$(recorded_pid)" "$(evidence)"
+assert_eq "repin/pin-sha-is-new-head" "$(head_sha)" "$(p="$(recorded_pin)"; echo "${p#*:}")" "$(evidence)"
+echo "trimmed hot" >"$VAULT/wiki/hot.md"
+run_guard_sid -m "budget trim" --pin "$(recorded_pin)"
+assert_eq "repin/second-commit-ok" "0" "$STATUS" "$(evidence)"
+assert_eq "repin/second-commit-landed" "budget trim" "$(head_subject)" "$(evidence)"
+
+# --- 48. ...but a FOREIGN commit between them is still refused (negative control)
+# The repin follows only the move this run made; it must never adopt another
+# session's commit, or the moved-HEAD guard is gone.
+sb_new "main"
+BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$SESSION_SH" --start save >/dev/null 2>&1
+make_dirty
+run_guard_sid -m "save" --pin "$(recorded_pin)"
+assert_eq "repin-foreign/first-commit-ok" "0" "$STATUS" "$(evidence)"
+mine="$(head_sha)"
+echo "foreign" >>"$VAULT/wiki/hot.md"
+git -C "$VAULT" commit -qam "foreign session commit" >/dev/null 2>&1
+foreign="$(head_sha)"
+make_dirty
+run_guard_sid -m "must refuse" --pin "$(recorded_pin)"
+assert_eq "repin-foreign/second-commit-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "repin-foreign/head-unmoved" "$foreign" "$(head_sha)" "$(evidence)"
+assert_eq "repin-foreign/pin-not-adopted" "$mine" "$(p="$(recorded_pin)"; echo "${p#*:}")" "$(evidence)"
+
+# --- 48b. a foreign commit right after this run's ref update: no repin -------
+# The sync sees HEAD past this commit, so the pin must stay at the pre-commit
+# sha; repinning to this commit would make runtime.mjs's own before->HEAD repin
+# refuse and report a landed commit as a failure.
+sb_new "main"
+BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$SESSION_SH" --start save >/dev/null 2>&1
+pin_start="$(recorded_pin)"
+make_dirty
+make_git_wrap "echo newer >>wiki/hot.md && '$REAL_GIT' add wiki/hot.md && '$REAL_GIT' commit -qm newer" "update-ref" after
+(export BRAIN_SESSION_ID="$SID"; run_guard -m "save" --pin "$pin_start")
+GIT_WRAP=""
+assert_eq "repin-race/wrapper-fired" "yes" "$([[ -f "$BOX/wrap/fired" ]] && echo yes)" "$(evidence)"
+assert_eq "repin-race/foreign-is-head" "newer" "$(head_subject)" "$(evidence)"
+assert_eq "repin-race/pin-not-advanced" "$pin_start" "$(recorded_pin)" "$(evidence)"
+
+# --- 49. no explicit session id => no repin ---------------------------------
+# Without BRAIN_SESSION_ID / CLAUDE_CODE_SESSION_ID, session.sh resolves the
+# last-started id, which can be ANOTHER session that started on the same sha:
+# repinning it would adopt this commit into that session's pin.
+sb_new "main"
+(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --start save >/dev/null 2>&1)
+pin_start="$(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --print-pin 2>/dev/null | sed -n 's/^  pin: //p' | tr -d '\r')"
+make_dirty
+(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; run_guard -m "anonymous" --pin "$pin_start")
+assert_ne "repin-anon/committed" "${pin_start#*:}" "$(head_sha)" "$(evidence)"
+assert_eq "repin-anon/pin-untouched" "$pin_start" \
+  "$(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --print-pin 2>/dev/null | sed -n 's/^  pin: //p' | tr -d '\r')" "$(evidence)"
+# ...nor with an id session.sh sanitizes to empty: it falls back the same way,
+# even when CLAUDE_CODE_SESSION_ID is valid (BRAIN_SESSION_ID wins when set).
+sb_new "main"
+(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --start save >/dev/null 2>&1)
+pin_start="$(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --print-pin 2>/dev/null | sed -n 's/^  pin: //p' | tr -d '\r')"
+make_dirty
+(export BRAIN_SESSION_ID='!' CLAUDE_CODE_SESSION_ID="$SID"; run_guard -m "sanitized-away id" --pin "$pin_start")
+assert_ne "repin-anon/sanitized-id-committed" "${pin_start#*:}" "$(head_sha)" "$(evidence)"
+assert_eq "repin-anon/sanitized-id-pin-untouched" "$pin_start" \
+  "$(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --print-pin 2>/dev/null | sed -n 's/^  pin: //p' | tr -d '\r')" "$(evidence)"
+
 # ------------------------------------------------------------------ done ---
 echo
 echo "$PASSED passed, $FAILED failed"

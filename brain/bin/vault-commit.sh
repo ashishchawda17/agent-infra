@@ -647,6 +647,25 @@ while :; do
 done
 [[ $sync_rc -eq 2 ]] &&
   echo "  NOTE: HEAD moved past this commit before the index sync; the index was left alone."
+
+# --- 10. the session's recorded pin follows this commit (INNOV-380) ---------
+# This commit is the session's own HEAD move, exactly like check-freshness.sh's
+# merge (INNOV-285), so a later --print-pin must return $NEW, or a second commit
+# in the same save is refused as "HEAD moved". session.sh --repin rewrites the
+# pin only when it still records $CUR_SHA, so a foreign move is never adopted.
+# Only with an explicit session id: without one session.sh falls back to the
+# last-started id, which may be another session that started on the same sha.
+# Same precedence as session.sh, whose sanitize_id empties a value with no
+# [A-Za-z0-9._] character — and an emptied id falls back the same way.
+# Not once the sync saw HEAD move past this commit (sync_rc 2): the pin stays at
+# the pre-commit sha, so the next pinned commit refuses that foreign move, and a
+# caller repinning before -> HEAD itself (runtime.mjs) is not refused.
+sid="${BRAIN_SESSION_ID:-${CLAUDE_CODE_SESSION_ID:-}}"
+if [[ $sync_rc -ne 2 && "$sid" =~ [A-Za-z0-9._] && -f "$VAULT/.brain/session.json" ]] &&
+   ! BRAIN_ROOT="$VAULT" bash "$BIN_DIR/session.sh" --repin "$CUR_SHA" "$NEW" >/dev/null 2>&1; then
+  echo "  NOTE: the session pin was NOT updated to this commit (it did not record the"
+  echo "        pre-commit sha); a later --print-pin commit will be refused as HEAD moved."
+fi
 echo "  Push when ready: git -C \"$VAULT\" push"
 # Last, so a caller reading only the head or the tail of the output still sees
 # it: printed before "Push when ready" it was missed, and the next symptom was
