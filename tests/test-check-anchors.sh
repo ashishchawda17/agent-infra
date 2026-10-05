@@ -537,6 +537,39 @@ assert_eq "enum/bad-confidence-exit-1" "1" "$STATUS" "$(evidence)"
 assert_out_has "enum/names-bad-confidence" 'wiki/_drafts/conf-bad.md — `confidence: high (decision)`' "$(evidence)"
 assert_out_lacks "enum/commented-value-is-clean" "conf-comment.md" "$(evidence)"
 
+# A quoted YAML scalar is the same value (INNOV-365): one pair of matching
+# quotes is stripped. A quoted value outside the enum is still flagged, and
+# mismatched quotes are not a pair. CRLF variant included.
+sb_new
+mknote q-double "demo/src/a.js" 'status: "current"'
+mknote q-single "demo/src/a.js" "confidence: 'high'   # reviewed"
+printf -- '---
+id: q-crlf
+source: demo/src/a.js
+confidence: "medium"
+---
+# c
+' >"$VAULT/wiki/_drafts/q-crlf.md"
+run_check
+assert_eq "enum/quoted-valid-exit-0" "0" "$STATUS" "$(evidence)"
+assert_out_lacks "enum/quoted-valid-no-suffix" "malformed enum" "$(evidence)"
+sb_new
+mknote q-bad "demo/src/a.js" 'status: "trusted"'
+mknote q-mismatch "demo/src/a.js" "status: \"current'"
+printf -- '---
+id: q-crlf-bad
+source: demo/src/a.js
+confidence: "certain"
+---
+# c
+' >"$VAULT/wiki/_drafts/q-crlf-bad.md"
+run_check
+assert_eq "enum/quoted-bad-exit-1" "1" "$STATUS" "$(evidence)"
+assert_out_has "enum/quoted-bad-count" "3 malformed enum(s)" "$(evidence)"
+assert_out_has "enum/quoted-bad-named" 'wiki/_drafts/q-bad.md' "$(evidence)"
+assert_out_has "enum/mismatched-quotes-named" 'wiki/_drafts/q-mismatch.md' "$(evidence)"
+assert_out_has "enum/quoted-crlf-bad-named" 'wiki/_drafts/q-crlf-bad.md' "$(evidence)"
+
 # A bad enum outranks an advisory: a note with NO source: would otherwise exit
 # 2 and be promotable on the user's say-so.
 sb_new

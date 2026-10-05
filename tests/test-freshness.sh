@@ -169,25 +169,31 @@ printf -- '---\r\nid: bad-crlf\r\ntags: [x]\r\nconfidence: medium (more conteste
 # INNOV-334: the value promote runs invented. Trust is location, not status.
 printf -- '---\r\nid: bad-trusted\r\ntags: [x]\r\nconfidence: medium\r\nstatus: trusted\r\n---\r\n# c\r\n' >"$VAULT/wiki/bad-trusted.md"
 printf -- '---\r\nid: ok-crlf\r\ntags: [x]\r\nconfidence: low\r\nstatus: falsified\r\n---\r\n# c\r\n' >"$VAULT/wiki/ok-crlf.md"
+# INNOV-365: a quoted YAML scalar is the same value; a quoted value outside
+# the enum, or mismatched quotes, is still malformed. CRLF variant included.
+fm ok-quoted "confidence: \"high\"\\nstatus: 'current' # reviewed"
+fm bad-quoted 'confidence: "certain"'
+fm bad-mismatch "confidence: \"high'"
+printf -- '---\r\nid: ok-quoted-crlf\r\ntags: [x]\r\nconfidence: "medium"\r\n---\r\n# c\r\n' >"$VAULT/wiki/ok-quoted-crlf.md"
 (
   cd "$BOX" || exit 99
   BRAIN_ROOT="$VAULT" node "$FRESH" --stdout
 ) >"$BOX/out.txt" 2>"$BOX/err.txt"
-if grep -qF 'Malformed `confidence:` / `status:` (4)' "$BOX/out.txt"; then
-  pass "enum/exactly-four"
+if grep -qF 'Malformed `confidence:` / `status:` (6)' "$BOX/out.txt"; then
+  pass "enum/exactly-six"
 else
-  fail "enum/exactly-four" \
-    "expected section header: Malformed \`confidence:\` / \`status:\` (4)" \
+  fail "enum/exactly-six" \
+    "expected section header: Malformed \`confidence:\` / \`status:\` (6)" \
     "actual: [$(grep -F -A5 'Malformed' "$BOX/out.txt")]" "stderr: [$(cat "$BOX/err.txt")]"
 fi
-for n in bad-conf bad-status bad-crlf bad-trusted; do
+for n in bad-conf bad-status bad-crlf bad-trusted bad-quoted bad-mismatch; do
   if grep -F 'wiki/'"$n"'.md' "$BOX/out.txt" | grep -qE '`(confidence|status): '; then
     pass "enum/flags-$n"
   else
     fail "enum/flags-$n" "wiki/$n.md not listed as malformed"
   fi
 done
-for n in ok-plain ok-status ok-comment ok-crlf; do
+for n in ok-plain ok-status ok-comment ok-crlf ok-quoted ok-quoted-crlf; do
   if grep -F 'wiki/'"$n"'.md' "$BOX/out.txt" | grep -qE '`(confidence|status): '; then
     fail "enum/clean-$n" "valid wiki/$n.md was flagged: [$(grep -F "$n" "$BOX/out.txt")]"
   else
@@ -273,10 +279,10 @@ else
 fi
 
 # --- 8. --json covers every Markdown section on the earlier fixtures -------
-# The enum box: 4 bad-enum findings, same as the header asserted in 6.
+# The enum box: 6 bad-enum findings, same as the header asserted in 6.
 ( cd "$TMPROOT" && BRAIN_ROOT="$VAULT_ENUM" node "$FRESH" --json ) >"$TMPROOT/enum.json" 2>/dev/null
 got="$(jcount "$TMPROOT/enum.json" bad-enum)"
-if [[ "$got" == "4" ]]; then pass "json/bad-enum-four"; else fail "json/bad-enum-four" "got [$got]"; fi
+if [[ "$got" == "6" ]]; then pass "json/bad-enum-six"; else fail "json/bad-enum-six" "got [$got]"; fi
 # The gitignored-anchor box: one unverifiable-source with reason gitignored.
 ( cd "$TMPROOT" && BRAIN_ROOT="$VAULT_IGN" node "$FRESH" --json ) >"$TMPROOT/ign.json" 2>/dev/null
 if node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8"));

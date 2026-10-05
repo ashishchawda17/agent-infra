@@ -35,7 +35,7 @@ import { join, basename, relative } from 'node:path';
 // revisions, the three-state verdict) lives in ONE place and is shared with
 // check-anchors.mjs — see brain/bin/anchors.mjs. Two implementations of one
 // resolver is the defect, not the convenience.
-import { buildAnchorContext, classifyAnchors, parseFrontmatter, enumValue, malformedEnums } from './anchors.mjs';
+import { buildAnchorContext, classifyAnchors, parseFrontmatter, enumValue, stripComment, malformedEnums } from './anchors.mjs';
 
 const argv = process.argv.slice(2);
 const argVal = (flag) => (argv.indexOf(flag) >= 0 ? argv[argv.indexOf(flag) + 1] : undefined);
@@ -263,7 +263,7 @@ function fileAliases(text) {
   // either with a trailing `# comment`. A multi-line flow list is not read.
   const im = fm[1].match(/^aliases:[ \t]*(\S.*?)[ \t]*$/m);
   if (!im) return [];
-  const value = enumValue(im[1]);
+  const value = stripComment(im[1]);
   const list = value.match(/^\[(.*)\]$/);
   if (!list) return [unquote(value)];
   return [...list[1].matchAll(/\s*("[^"]*"|'[^']*'|[^,]+)/g)].map((x) => unquote(x[1])).filter(Boolean);
