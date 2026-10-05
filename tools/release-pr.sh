@@ -1,0 +1,87 @@
+#!/usr/bin/env bash
+# release-pr.sh — open (or refresh) one release PR per plugin with pending bump
+# fragments (INNOV-330). Run by .github/workflows/release-pr.yml on push to main.
+#
+# For each .bumps/<plugin>/ holding a fragment, rebuild release/<plugin> from
+# the current HEAD plus one commit that runs tools/bump-version.mjs, force-push
+# it, create the PR (or edit the open one), and dispatch ci.yml on the branch:
+# a GITHUB_TOKEN push or PR starts no push/pull_request workflows, but a
+# workflow_dispatch does, so the release SHA gets real checks before merge.
+#
+# The branch name carries no version: a later minor fragment changes the
+# version, and a versioned name would open a second PR. No fragments: exit 0
+# untouched, which is also how the merge of a release PR (it deletes the
+# fragments) skips itself. Every release commit is built before the first
+# push, so one bad plugin never strands another's half-published release.
+#
+# Merging, tagging the merge commit and pushing the mirror stay manual.
+# Needs: git with an `origin`, node, gh (GH_TOKEN). Bash 3.2 (INNOV-284).
+set -euo pipefail
+
+cd "$(git rev-parse --show-toplevel)"
+BASE="$(git rev-parse HEAD)"
+
+plugins=""
+for d in .bumps/*/; do
+  [ -d "$d" ] || continue
+  p="$(basename "$d")"
+  # Direct-child files only, matching bump-version.mjs and check-version-bump.sh.
+  [ -n "$(find "$d" -mindepth 1 -maxdepth 1 -type f | head -n 1)" ] || continue
+  if [ ! -f "$p/.claude-plugin/plugin.json" ]; then
+    echo "release-pr: .bumps/$p/ has fragments but $p/.claude-plugin/plugin.json does not exist." >&2
+    exit 1
+  fi
+  plugins="$plugins $p"
+done
+
+if [ -z "$plugins" ]; then
+  echo "release-pr: no pending fragments — nothing to release."
+  exit 0
+fi
+
+version_of() { node -p 'require(process.argv[1]).version' "$PWD/$1/.claude-plugin/plugin.json"; }
+
+# Phase 1: build every release commit locally. Any failure exits before a push.
+for p in $plugins; do
+  git checkout -q -B "release/$p" "$BASE"
+  old="$(version_of "$p")"
+  node tools/bump-version.mjs "$p"
+  new="$(version_of "$p")"
+  if [ "$new" = "$old" ]; then
+    echo "release-pr: $p version did not change ($old) after bump-version.mjs — refusing to release." >&2
+    exit 1
+  fi
+  git add -A
+  git commit -q -m "release($p): $old -> $new"
+done
+git checkout -q --detach "$BASE"
+
+# Phase 2: publish.
+for p in $plugins; do
+  branch="release/$p"
+  title="$(git log -1 --format=%s "$branch")"
+  frags="$(git diff --name-only --diff-filter=D "$BASE" "$branch" -- ".bumps/$p/" | sed "s|^\.bumps/$p/||")"
+  git push -q --force origin "$branch:refs/heads/$branch"
+
+  body="$(cat <<EOF
+Automated by \`.github/workflows/release-pr.yml\` (INNOV-330): \`node tools/bump-version.mjs $p\` applied these pending fragments:
+
+$(printf '%s\n' "$frags" | sed 's/^/- /')
+
+CI is dispatched on this branch (a \`GITHUB_TOKEN\` PR starts no \`pull_request\` checks). Merge once \`tests\` is green on both runners. After merging:
+1. Tag the **merge commit**, not this branch's commit.
+2. Push the \`vendsy/agent-infra\` mirror by URL, fast-forward only.
+
+This branch is rebuilt from \`main\` whenever \`.bumps/\` changes there, so hand edits here are overwritten. To hold a release, leave this PR open. Closing it opens a fresh one on the next fragment push.
+EOF
+)"
+  open="$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number')"
+  if [ -n "$open" ]; then
+    gh pr edit "$open" --title "$title" --body "$body"
+    echo "release-pr: $title, updated PR #$open."
+  else
+    gh pr create --base main --head "$branch" --title "$title" --body "$body"
+    echo "release-pr: $title, opened a PR."
+  fi
+  gh workflow run ci.yml --ref "$branch"
+done
