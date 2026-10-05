@@ -1253,11 +1253,17 @@ recorded_pin() {
     | sed -n 's/^  pin: //p' | head -n 1 | tr -d '\r'
 }
 
+recorded_pid() { grep -o '"pid": [0-9]*' "$VAULT/.brain/session.json" 2>/dev/null | head -n 1; }
+
 sb_new "main"
 BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$SESSION_SH" --start save >/dev/null 2>&1
+pid_start="$(recorded_pid)"
 make_dirty
 run_guard_sid -m "save" --pin "$(recorded_pin)"
 assert_eq "repin/first-commit-ok" "0" "$STATUS" "$(evidence)"
+# The repin runs in vault-commit's short-lived shell; recording THAT pid would let
+# the pid reap (Linux/macOS) read the still-running save as a dead session.
+assert_eq "repin/start-pid-kept" "$pid_start" "$(recorded_pid)" "$(evidence)"
 assert_eq "repin/pin-sha-is-new-head" "$(head_sha)" "$(p="$(recorded_pin)"; echo "${p#*:}")" "$(evidence)"
 echo "trimmed hot" >"$VAULT/wiki/hot.md"
 run_guard_sid -m "budget trim" --pin "$(recorded_pin)"
@@ -1281,6 +1287,19 @@ run_guard_sid -m "must refuse" --pin "$(recorded_pin)"
 assert_eq "repin-foreign/second-commit-refused" "1" "$STATUS" "$(evidence)"
 assert_eq "repin-foreign/head-unmoved" "$foreign" "$(head_sha)" "$(evidence)"
 assert_eq "repin-foreign/pin-not-adopted" "$mine" "$(p="$(recorded_pin)"; echo "${p#*:}")" "$(evidence)"
+
+# --- 49. no explicit session id => no repin ---------------------------------
+# Without BRAIN_SESSION_ID / CLAUDE_CODE_SESSION_ID, session.sh resolves the
+# last-started id, which can be ANOTHER session that started on the same sha:
+# repinning it would adopt this commit into that session's pin.
+sb_new "main"
+(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --start save >/dev/null 2>&1)
+pin_start="$(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --print-pin 2>/dev/null | sed -n 's/^  pin: //p' | tr -d '\r')"
+make_dirty
+(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; run_guard -m "anonymous" --pin "$pin_start")
+assert_ne "repin-anon/committed" "${pin_start#*:}" "$(head_sha)" "$(evidence)"
+assert_eq "repin-anon/pin-untouched" "$pin_start" \
+  "$(unset BRAIN_SESSION_ID CLAUDE_CODE_SESSION_ID; BRAIN_ROOT="$VAULT" bash "$SESSION_SH" --print-pin 2>/dev/null | sed -n 's/^  pin: //p' | tr -d '\r')" "$(evidence)"
 
 # ------------------------------------------------------------------ done ---
 echo

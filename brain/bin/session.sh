@@ -587,6 +587,9 @@ if [[ "$MODE" == "repin" ]]; then
           "  pin is unchanged, so vault-commit.sh will refuse it — which is the" \
           "  moved-HEAD guard working, not a bug."
       fi
+      # Keep the pid --start recorded: ours is the caller's short-lived shell, and
+      # the best-effort reap would read it as a dead session (INNOV-380).
+      SELF_PID="${REC_PID[$i]}"
       write_state "${REC_BRANCH[$i]}" "$REPIN_NEW" "${REC_AT[$i]}" "${REC_CMD[$i]}"
       echo "SESSION: OK - pin for session $SELF_ID updated after its own freshness merge"
       echo "  pin: ${REC_BRANCH[$i]}:$REPIN_NEW"
