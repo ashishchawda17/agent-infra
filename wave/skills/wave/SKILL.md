@@ -45,8 +45,24 @@ A quick task you are present for does not need a wave at all: do it in your sess
 
 A repo opts in with two committed files:
 - **`.claude/wave/config.env`** (required) — tracker (`linear`|`jira`), the agent-ready
-  queue query, workflow state names, where follow-ups get filed. Start from
-  `$WAVE/config.example.env`. Every script refuses to run without it.
+  queue query, workflow state names, where follow-ups get filed. Every script refuses
+  to run without it. If it is missing, bootstrap it instead of copying
+  `$WAVE/config.example.env` by hand:
+  1. `bash "$WAVE/bootstrap.sh"`. It reads the tracker type, project (Jira) or team
+     (Linear) and `site` from the vault's committed `brain.json` `tracker` (vault =
+     `$BRAIN_ROOT`, else the repo's `.brain/config.json`), and prints one
+     `NEED: <what> - <why>; pass --<flag>` line per gap, exit 2, writing nothing.
+  2. Ask the user (`AskUserQuestion`) only for what it NEEDs: always the repo label that
+     scopes the queue (e.g. `brain-plugin`), plus the tracker and project/team when
+     there is no vault binding or no `tracker`, and the Jira site when `brain.json` has
+     no `tracker.site`. Offer the default states (`In Progress` / `Validate` for Jira,
+     `In Progress` / `In Review` for Linear; override with `--start` / `--done`).
+  3. Re-run with those flags (`--label`, `--tracker`, `--project`, `--site`). It writes
+     and prints the config. Tell the user to review and commit it, and **do not spawn in
+     the same run**.
+
+  An existing `config.env` is never touched. `brain.json` stays the source for tracker
+  type and project; `config.env` for everything repo-specific.
 - **`.claude/wave/notes.md`** (optional) — project rules appended to the worker prompt
   verbatim: shared databases, dev-server ports, env files to copy, current CI state.
   This is the only place project knowledge goes. Keep it current: a stale line

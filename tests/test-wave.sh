@@ -201,6 +201,112 @@ printf 'a\n' >"$BOX/pre.txt"
 assert_eq "guard/edit-untracked" "3" "$(guard sh -c 'echo b >> pre.txt')"
 rm -f "$BOX/pre.txt"
 
+# --- bootstrap (INNOV-383): config.env from the vault's brain.json + flags ---
+export BRAIN_HOME="$TMPROOT/brain-home"  # never the real registry
+new_vault() { # brain.json body (printf %b, so \r\n works)
+  VAULT="$(mktemp -d "$TMPROOT/vaultXXXXXX")"
+  printf '%b' "$1" >"$VAULT/brain.json"
+}
+boot() { # env-and-args... ; runs bootstrap in $BOX, output in $BOX/boot.txt
+  (cd "$BOX" && env "$@") >"$BOX/boot.txt" 2>&1
+  echo $?
+}
+CFG() { echo "$BOX/.claude/wave/config.env"; }
+
+echo "--- 15. bootstrap: jira brain.json -> a config lib.sh accepts ---"
+new_sandbox ""
+new_vault '{"tracker": {"type": "jira", "project": "INNOV", "site": "vendsy.atlassian.net"}}\n'
+st="$(boot BRAIN_ROOT="$VAULT" bash "$WAVE/bootstrap.sh" --label brain-plugin)"
+assert_eq "boot-jira/exit-0" "0" "$st"
+assert_contains "boot-jira/prints-config" "$(cat "$BOX/boot.txt")" "WAVE_TRACKER=jira"
+assert_contains "boot-jira/says-commit" "$(cat "$BOX/boot.txt")" "commit"
+cfg="$(cat "$(CFG)")"
+assert_contains "boot-jira/queue" "$cfg" "WAVE_QUEUE='project = INNOV AND labels = brain-plugin AND labels = agent-ready AND statusCategory = \"To Do\" AND assignee IS EMPTY ORDER BY priority DESC'"
+assert_contains "boot-jira/site" "$cfg" "WAVE_JIRA_SITE=vendsy.atlassian.net"
+assert_contains "boot-jira/default-done" "$cfg" "WAVE_STATE_DONE='Validate'"
+assert_contains "boot-jira/file-to" "$cfg" "WAVE_FILE_TO='Jira project INNOV, label brain-plugin'"
+st="$(spawn_dry)"
+assert_eq "boot-jira/lib-accepts" "0" "$st"
+assert_contains "boot-jira/prompt-site" "$(cat "$BOX/out.txt")" "(site vendsy.atlassian.net)"
+
+echo "--- 16. bootstrap: CRLF brain.json parses the same ---"
+new_sandbox ""
+new_vault '{\r\n  "tracker": { "type": "jira", "project": "INNOV", "site": "vendsy.atlassian.net" }\r\n}\r\n'
+st="$(boot BRAIN_ROOT="$VAULT" bash "$WAVE/bootstrap.sh" --label brain-plugin)"
+assert_eq "boot-crlf/exit-0" "0" "$st"
+assert_contains "boot-crlf/site-no-cr" "$(cat "$(CFG)")" "WAVE_JIRA_SITE=vendsy.atlassian.net
+"
+assert_eq "boot-crlf/lib-accepts" "0" "$(spawn_dry)"
+
+echo "--- 17. bootstrap: linear brain.json uses its team key ---"
+new_sandbox ""
+new_vault '{"tracker": {"type": "linear", "team": "SPO"}}\n'
+st="$(boot BRAIN_ROOT="$VAULT" bash "$WAVE/bootstrap.sh" --label sports)"
+assert_eq "boot-linear/exit-0" "0" "$st"
+cfg="$(cat "$(CFG)")"
+assert_contains "boot-linear/queue" "$cfg" "WAVE_QUEUE='team SPO, state Backlog, label sports, label agent-ready, unassigned'"
+assert_contains "boot-linear/team" "$cfg" "WAVE_LINEAR_TEAM=SPO"
+assert_contains "boot-linear/default-done" "$cfg" "WAVE_STATE_DONE='In Review'"
+assert_not_contains "boot-linear/no-site" "$cfg" "WAVE_JIRA_SITE"
+st="$(spawn_dry)"
+assert_eq "boot-linear/lib-accepts" "0" "$st"
+assert_contains "boot-linear/prompt" "$(cat "$BOX/out.txt")" "orca linear"
+
+echo "--- 18. bootstrap: no vault binding asks for the tracker, writes nothing ---"
+new_sandbox ""
+st="$(boot bash "$WAVE/bootstrap.sh" --label x)"
+assert_eq "boot-unbound/exit-2" "2" "$st"
+assert_contains "boot-unbound/need-tracker" "$(cat "$BOX/boot.txt")" "NEED: tracker"
+if [[ ! -e "$(CFG)" ]]; then pass "boot-unbound/no-write"; else fail "boot-unbound/no-write" "config.env was written"; fi
+st="$(boot bash "$WAVE/bootstrap.sh" --label x --tracker jira --project ABC --site a.atlassian.net)"
+assert_eq "boot-unbound/flags-exit-0" "0" "$st"
+assert_eq "boot-unbound/flags-lib-accepts" "0" "$(spawn_dry)"
+
+echo "--- 19. bootstrap: tracker type none, missing site, missing label ---"
+new_sandbox ""
+new_vault '{"tracker": {"type": "none"}}\n'
+boot BRAIN_ROOT="$VAULT" bash "$WAVE/bootstrap.sh" --label x >/dev/null
+assert_contains "boot-none/need-tracker" "$(cat "$BOX/boot.txt")" "NEED: tracker"
+new_vault '{"tracker": {"type": "jira", "project": "INNOV"}}\n'
+st="$(boot BRAIN_ROOT="$VAULT" bash "$WAVE/bootstrap.sh" --label x)"
+assert_eq "boot-nosite/exit-2" "2" "$st"
+assert_contains "boot-nosite/need-site" "$(cat "$BOX/boot.txt")" "NEED: site"
+st="$(boot BRAIN_ROOT="$VAULT" bash "$WAVE/bootstrap.sh")"
+assert_eq "boot-nolabel/exit-2" "2" "$st"
+assert_contains "boot-nolabel/need-label" "$(cat "$BOX/boot.txt")" "NEED: label"
+if [[ ! -e "$(CFG)" ]]; then pass "boot-need/no-write"; else fail "boot-need/no-write" "config.env was written"; fi
+
+echo "--- 20. bootstrap: a quote or newline in a value is refused ---"
+st="$(boot BRAIN_ROOT="$VAULT" bash "$WAVE/bootstrap.sh" --site s --label "x'; touch pwned; '")"
+assert_eq "boot-quote/exit-1" "1" "$st"
+if [[ ! -e "$(CFG)" ]]; then pass "boot-quote/no-write"; else fail "boot-quote/no-write" "config.env was written"; fi
+
+echo "--- 21. bootstrap: .brain/config.json binding resolves via the registry ---"
+new_sandbox ""
+new_vault '{"tracker": {"type": "linear", "team": "SPO"}}\n'
+mkdir -p "$BOX/.brain" "$BRAIN_HOME"
+printf '{"version":1,"vault":"abc123"}\n' >"$BOX/.brain/config.json"
+printf '{"version":1,"vaults":[{"id":"abc123","path":"%s"}]}\n' "$(cygpath -m "$VAULT" 2>/dev/null || echo "$VAULT")" >"$BRAIN_HOME/registry.json"
+st="$(boot bash "$WAVE/bootstrap.sh" --label sports)"
+assert_eq "boot-binding/exit-0" "0" "$st"
+assert_contains "boot-binding/team" "$(cat "$(CFG)" 2>/dev/null)" "WAVE_LINEAR_TEAM=SPO"
+
+echo "--- 22. bootstrap: an existing config.env is byte-identical ---"
+new_sandbox ""
+mkdir -p "$BOX/.claude/wave"
+printf 'WAVE_TRACKER=jira \r\n# hand-edited\r\n' >"$(CFG)"
+cp "$(CFG)" "$BOX/before"
+new_vault '{"tracker": {"type": "linear", "team": "SPO"}}\n'
+st="$(boot BRAIN_ROOT="$VAULT" bash "$WAVE/bootstrap.sh" --label sports)"
+assert_eq "boot-existing/exit-0" "0" "$st"
+if cmp -s "$BOX/before" "$(CFG)"; then pass "boot-existing/byte-identical"; else fail "boot-existing/byte-identical" "config.env changed"; fi
+assert_contains "boot-existing/says-kept" "$(cat "$BOX/boot.txt")" "already exists"
+
+echo "--- 23. lib.sh refusal points at the bootstrap ---"
+new_sandbox ""
+spawn_dry >/dev/null
+assert_contains "no-config/names-bootstrap" "$(cat "$BOX/out.txt")" "bootstrap.sh"
+
 echo
 echo "$PASSED passed, $FAILED failed"
 [[ $FAILED -eq 0 ]]
