@@ -688,6 +688,40 @@ run_shadow
 assert_eq "shadow/none-exit-0" "0" "$STATUS" "$(evidence)"
 assert_prefix "shadow/none-skipped" "SHADOW-INSTALL: SKIPPED" "$(first_line "$BOX/out.txt")" "$(evidence)"
 
+# --- 34b. a stale brain-family marketplace registration (INNOV-336) ----------
+# An inert registration is not a shadow, so the verdict stays OK, but check 12
+# appends an advisory. mk_market <name> <plugin>: registers a marketplace whose
+# clone lists one plugin.
+mk_market() {
+  mkdir -p "$CFG/plugins/marketplaces/$1/.claude-plugin"
+  printf '{ "name": "%s", "plugins": [ { "name": "%s", "source": "./%s" } ] }\n' "$1" "$2" "$2" \
+    >"$CFG/plugins/marketplaces/$1/.claude-plugin/marketplace.json"
+  MARKETS="${MARKETS:+$MARKETS, }\"$1\": { \"installLocation\": \"$(native "$CFG")/plugins/marketplaces/$1\" }"
+  printf '{ %s }\n' "$MARKETS" >"$CFG/plugins/known_marketplaces.json"
+}
+# NEGATIVE CONTROL: one brain-family marketplace (plus a non-brain one) => no note.
+mk_shadow "$USER_REC"; MARKETS=""
+mk_market agent-infra brain; mk_market ponytail ponytail
+run_shadow
+assert_eq "market/one-exit-0" "0" "$STATUS" "$(evidence)"
+assert_not_contains "market/one-no-note" "STALE-MARKETPLACE" "$(out_all)" "$(evidence)"
+# Two => the extra one is named with its removal step; the verdict is untouched.
+mk_market tray-brain-marketplace tray-brain
+run_shadow
+assert_eq "market/two-exit-0" "0" "$STATUS" "$(evidence)"
+assert_prefix "market/two-verdict-ok" "SHADOW-INSTALL: OK" "$(first_line "$BOX/out.txt")" "$(evidence)"
+assert_contains "market/two-note" "STALE-MARKETPLACE: WARN - tray-brain-marketplace" "$(out_all)" "$(evidence)"
+assert_contains "market/two-remove-cmd" "claude plugin marketplace remove tray-brain-marketplace" "$(out_all)" "$(evidence)"
+assert_not_contains "market/installed-not-named" "WARN - agent-infra" "$(out_all)" "$(evidence)"
+# extraKnownMarketplaces alone (no clone, CRLF settings) is a registration too.
+mk_shadow "$USER_REC"; MARKETS=""
+mk_market agent-infra brain
+printf '{\r\n  "extraKnownMarketplaces": {\r\n    "tray-brain-marketplace": { "source": { "source": "github", "repo": "x/tray-brain" } }\r\n  }\r\n}\r\n' >"$CFG/settings.json"
+run_shadow
+assert_eq "market/extra-exit-0" "0" "$STATUS" "$(evidence)"
+assert_contains "market/extra-note" "STALE-MARKETPLACE: WARN - tray-brain-marketplace" "$(out_all)" "$(evidence)"
+assert_contains "market/extra-names-settings" "extraKnownMarketplaces" "$(out_all)" "$(evidence)"
+
 echo "--- G. check-command-prefix.sh (INNOV-318, check 13) ---"
 
 mk_pvault() { # CLAUDE.md content (printf format, so \r\n is literal CRLF)
