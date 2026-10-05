@@ -402,6 +402,82 @@ for row in dead-link:true stale:true singleton-tag:false unverifiable-source:fal
   fi
 done
 
+# --- 11. owner: must be one of brain.json's people (INNOV-298) -------------
+# A missing owner and one outside `people` are counted findings; a trailing
+# comment and YAML quotes are not part of the value. CRLF variants included.
+BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+VAULT="$BOX/vault"
+mkdir -p "$VAULT/wiki"
+printf '{"tracker": {"type": "none"}, "people": ["karch4162", "sndhrty"]}\n' >"$VAULT/brain.json"
+own() { printf -- '---\nid: %s\ntags: [x]\n%b---\n# %s\n' "$1" "$2" "$1" >"$VAULT/wiki/$1.md"; }
+own ok-own 'owner: karch4162\n'
+own ok-own-comment 'owner: karch4162   # canonical\n'
+own ok-own-quoted 'owner: "sndhrty"\n'
+own bad-own 'owner: mason.beard\n'
+own no-own ''
+printf -- '---\r\nid: ok-own-crlf\r\ntags: [x]\r\nowner: sndhrty\r\n---\r\n# c\r\n' >"$VAULT/wiki/ok-own-crlf.md"
+printf -- '---\r\nid: bad-own-crlf\r\ntags: [x]\r\nowner: willstowers\r\n---\r\n# c\r\n' >"$VAULT/wiki/bad-own-crlf.md"
+( cd "$BOX" && BRAIN_ROOT="$VAULT" node "$FRESH" --stdout ) >"$BOX/out.md" 2>"$BOX/err.txt"
+( cd "$BOX" && BRAIN_ROOT="$VAULT" node "$FRESH" --json ) >"$BOX/out.json" 2>/dev/null
+if grep -qF '`owner:` missing or not in `brain.json` people (3)' "$BOX/out.md"; then
+  pass "owner/exactly-three"
+else
+  fail "owner/exactly-three" "actual: [$(grep -F -A4 'owner:' "$BOX/out.md")]" "stderr: [$(cat "$BOX/err.txt")]"
+fi
+if node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).filter(f=>f.kind==="bad-owner");
+  const by=Object.fromEntries(a.map(f=>[f.note,f.owner]));
+  process.exit(a.length===3&&a.every(f=>f.counted===true)&&by["wiki/bad-own.md"]==="mason.beard"
+    &&by["wiki/bad-own-crlf.md"]==="willstowers"&&by["wiki/no-own.md"]===null?0:1)' "$BOX/out.json" 2>/dev/null; then
+  pass "owner/json-fields"
+else
+  fail "owner/json-fields" "got: [$(cat "$BOX/out.json")]"
+fi
+for n in ok-own ok-own-comment ok-own-quoted ok-own-crlf; do
+  if grep -F "wiki/$n.md" "$BOX/out.md" | grep -qiF 'owner'; then
+    fail "owner/clean-$n" "valid wiki/$n.md was flagged: [$(grep -F "$n" "$BOX/out.md")]"
+  else
+    pass "owner/clean-$n"
+  fi
+done
+counted_matches_total owner "$BOX/out.json" "$BOX/out.md"
+
+# Negative control: one unknown owner beside one known one is exactly one finding.
+BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+VAULT="$BOX/vault"
+mkdir -p "$VAULT/wiki"
+printf '{"people": ["karch4162"]}\n' >"$VAULT/brain.json"
+own ok-own 'owner: karch4162\n'
+own bad-own 'owner: Mason Beard\n'
+( cd "$BOX" && BRAIN_ROOT="$VAULT" node "$FRESH" --json ) >"$BOX/out.json" 2>/dev/null
+got="$(jcount "$BOX/out.json" bad-owner)"
+if [[ "$got" == "1" ]]; then pass "owner/unknown-exactly-one"; else fail "owner/unknown-exactly-one" "got [$got]: [$(cat "$BOX/out.json")]"; fi
+
+# No usable `people` list → SKIPPED, never a finding per note: unverifiable is
+# not wrong. Absent file, no key, empty list, and unparseable JSON.
+for variant in absent no-key empty bad-json; do
+  BOX="$(mktemp -d "$TMPROOT/boxXXXXXX")"
+  VAULT="$BOX/vault"
+  mkdir -p "$VAULT/wiki"
+  case "$variant" in
+    no-key) printf '{"tracker": {"type": "none"}}\n' >"$VAULT/brain.json" ;;
+    empty) printf '{"people": []}\r\n' >"$VAULT/brain.json" ;;
+    bad-json) printf '{"people": [\n' >"$VAULT/brain.json" ;;
+  esac
+  own bad-own 'owner: mason.beard\n'
+  own no-own ''
+  ( cd "$BOX" && BRAIN_ROOT="$VAULT" node "$FRESH" --stdout ) >"$BOX/out.md" 2>"$BOX/err.txt"
+  st=$?
+  ( cd "$BOX" && BRAIN_ROOT="$VAULT" node "$FRESH" --json ) >"$BOX/out.json" 2>/dev/null
+  if [[ "$st" == "0" ]] && grep -qF '`owner:` check: SKIPPED' "$BOX/out.md" \
+    && [[ "$(jcount "$BOX/out.json" bad-owner)" == "0" ]] \
+    && node -e 'const a=JSON.parse(require("fs").readFileSync(process.argv[1],"utf8")).filter(f=>f.kind==="owner-check-skipped");
+      process.exit(a.length===1&&a[0].counted===false?0:1)' "$BOX/out.json" 2>/dev/null; then
+    pass "owner/skipped-$variant"
+  else
+    fail "owner/skipped-$variant" "exit [$st]; report: [$(grep -iF 'owner' "$BOX/out.md")]" "json: [$(cat "$BOX/out.json")]" "stderr: [$(cat "$BOX/err.txt")]"
+  fi
+done
+
 # ================================================================= SUMMARY ==
 echo
 echo "$PASSED passed, $FAILED failed"

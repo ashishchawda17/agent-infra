@@ -67,7 +67,7 @@ Present a recommendation per draft (`promote to wiki/<area>/` · `merge into [[e
 ### 3. Validate/complete frontmatter (keepers only)
 
 Ensure each keeper has:
-- `owner` — default to the vault's git user; flag placeholder owners.
+- `owner` — the author's GitHub handle, one of `people` in the vault's `brain.json`; never `git config user.name` or an email local-part, which is how one person ended up with five spellings (INNOV-298). Flag placeholder owners.
 - a `source:` anchor — the `repo/file#anchor`, PR, or commit that makes the fact true. **Whether it resolves is decided by the script below, never by your reading of the path.**
 - `last_verified:` = today — but only after you actually re-checked the claim against the source (a promote is a verification event, not a rubber stamp).
 - an honest `confidence` — promotion usually raises `low` → `medium`; only the user can call `high`.
