@@ -12,6 +12,8 @@
 //   5. hot.md over budget   — the rolling cache exceeds its word budget (accretion)
 //   6. Malformed enums      — `confidence:` not exactly high|medium|low, or a present
 //                             `status:` not exactly current|superseded|falsified
+//   7. Unknown owners       — `owner:` missing, or not one of brain.json's `people`
+//                             (SKIPPED when the vault declares no `people`)
 //   + missing/singleton tags, whole-vault graph connectivity (detached wiki
 //     clusters + mirror islands), and community labeling health per mirror
 //     (never labeled — no report at all — vs all-generic "Community N" labels).
@@ -65,6 +67,16 @@ if (!existsSync(join(VAULT, 'wiki'))) {
 // outside its own report.
 const ANCHORS = buildAnchorContext(VAULT);
 const COVERED = ANCHORS.covered;
+
+// The vault's known owners (INNOV-298): `people` in the committed brain.json,
+// beside `tracker`, so adding a person is a data change. No usable list means
+// the owner check is SKIPPED — unverifiable is not wrong.
+const PEOPLE = (() => {
+  try {
+    const p = JSON.parse(readFileSync(join(VAULT, 'brain.json'), 'utf8')).people;
+    return Array.isArray(p) && p.length ? new Set(p) : null;
+  } catch { return null; }
+})();
 
 // ---- collect markdown files --------------------------------------------------
 function walk(dir, acc = []) {
@@ -153,6 +165,7 @@ const areaMismatchSources = [];
 const noFrontmatter = [];
 const noTags = [];
 const badEnums = [];
+const badOwners = [];
 const lowConfidence = []; // JSON-only: the Markdown report has no such section
 const tagCounts = new Map(); // tag → [note rel paths]
 
@@ -185,6 +198,12 @@ for (const n of parsed) {
   //    promote gate.
   for (const b of malformedEnums(n.fm)) badEnums.push({ from: rel, ...b });
   if (enumValue(n.fm.confidence ?? '') === 'low') lowConfidence.push({ from: rel });
+
+  // 7. owner (INNOV-298) — one canonical spelling per person, the GitHub handle.
+  if (PEOPLE) {
+    const owner = n.fm.owner === undefined ? '' : enumValue(n.fm.owner);
+    if (!PEOPLE.has(owner)) badOwners.push({ from: rel, owner: owner || null });
+  }
 
   // 3. stale last_verified
   if (n.fm.last_verified) {
@@ -362,6 +381,7 @@ L.push(
     (unverifiableSources.length ? ` · Unverifiable sources: ${unverifiableSources.length}` : '') +
     ` · No tags: ${noTags.length}` +
     (badEnums.length ? ` · Malformed enums: ${badEnums.length}` : '') +
+    (!PEOPLE ? ' · Owner check: SKIPPED' : badOwners.length ? ` · Bad owners: ${badOwners.length}` : '') +
     ` · Detached wiki clusters: ${detachedKnowledge.length}` +
     (mirrorIslands.length ? ` · Mirror islands: ${mirrorIslands.length}` : '') +
     (noReportRepos.length ? ` · Graphs never labeled (no report): ${noReportRepos.length}` : '') +
@@ -464,6 +484,15 @@ section('Malformed `confidence:` / `status:`', badEnums, (b) =>
   `[${b.from}](${b.from}) — \`${b.key}: ${b.value}\` is not one of ${b.allowed.join(' | ')}. ` +
   `Keep the note-level floor in \`confidence:\` and qualify individual claims in the body; ` +
   `a replaced or disproven conclusion goes in \`status:\`, not \`confidence:\`.`);
+if (PEOPLE)
+  section('`owner:` missing or not in `brain.json` people', badOwners, (o) =>
+    `[${o.from}](${o.from}) — ` + (o.owner === null ? 'no `owner:`' : `\`owner: ${o.owner}\` is not one of ${[...PEOPLE].join(' | ')}`) +
+    `. The owner is the author's GitHub handle; a new person is added to \`people\`, not invented per note.`);
+else {
+  L.push('## `owner:` check: SKIPPED');
+  L.push('_`brain.json` has no `people` list, so owners cannot be checked. Add `"people": ["<github-handle>", ...]` to enable it._');
+  L.push('');
+}
 section('Notes missing `tags:`', noTags, (f) => `[${f}](${f})`);
 const singletons = [...tagCounts.entries()].filter(([, ns]) => ns.length === 1).sort();
 section('Singleton tags (used by one note — fold into the shared vocab or drop)', singletons, ([t, ns]) => `\`${t}\` — only on [${ns[0]}](${ns[0]})`);
@@ -533,7 +562,7 @@ L.push('');
 const countedLists = new Set([
   deadLinks, orphans, stale, brokenSources,
   areaMismatchSources,
-  noFrontmatter, noTags, badEnums, detachedKnowledge, hotBloat,
+  noFrontmatter, noTags, badEnums, badOwners, detachedKnowledge, hotBloat,
   mirrorIslands, genericLabelRepos, noReportRepos,
 ]);
 const total = [...countedLists].reduce((n, list) => n + list.length, 0);
@@ -556,6 +585,8 @@ if (TO_JSON) {
   add('wrong-repo-source', areaMismatchSources, (a) => ({ note: a.from, source: a.source, repo: a.repo, area: a.area }));
   add('unverifiable-source', unverifiableSources, (u) => ({ note: u.from, source: u.source, repo: u.repo, reason: u.reason ?? 'no-checkout' }));
   add('bad-enum', badEnums, (b) => ({ note: b.from, key: b.key, value: b.value, allowed: b.allowed }));
+  add('bad-owner', badOwners, (o) => ({ note: o.from, owner: o.owner }));
+  if (!PEOPLE) findings.push({ kind: 'owner-check-skipped', reason: 'brain.json has no people list', counted: false });
   add('no-tags', noTags, (f) => ({ note: f }));
   add('singleton-tag', singletons, ([t, ns]) => ({ note: ns[0], tag: t }));
   add('no-frontmatter', noFrontmatter, (f) => ({ note: f }));

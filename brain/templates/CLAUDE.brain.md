@@ -107,6 +107,7 @@ This is not bookkeeping. While the carve-out was a machine-local, git-excluded f
   digest: <chats/<repo>/<digest>.md>          # optional; the git-ignored transcript a draft was distilled from — provenance, never an anchor
   ---
   ```
+- **`owner` is the author's GitHub handle** — exactly that spelling, never a display name or email local-part, so one person is one value across every note and vault. The handle is what git history and PRs prove; it survives an email-domain change. Known owners are listed once in this vault's committed `brain.json` (`"people": [...]`); `/brain:freshness` flags a missing `owner:` or one not in that list. Adding a person is an edit to `people`.
 - **`confidence` is the note's floor — exactly one value.** When claims in one note differ, qualify them in the body, never on the `confidence:` line. **`status` is not confidence:** `superseded` = the conclusion was replaced (keep the note as the decision record and `[[link]]` its replacement); `falsified` = the thesis was tested and did not hold. `/brain:freshness` flags any other value in either field.
 - **Namespace by area** (`wiki/<area>/...`); cross-cutting contracts go in `wiki/bridges/`.
 - **Tags are the cross-cutting axis** — folders/`id` prefixes scope a note to its repo; `tags` link the *same concept across repos*. Aim for 2–4 tags and **reuse existing tags** rather than coining singletons. `/brain:freshness` flags missing/singleton tags.
