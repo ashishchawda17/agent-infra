@@ -833,6 +833,7 @@ last="$(tail -n 1 "$BOX/out.txt" | tr -d '\r')"
 assert_eq "sync-lock/never-clears-commits" "0" "$STATUS" "$(evidence)"
 assert_contains "sync-lock/warning-in-tail" "WARNING" "$(tail -n 3 "$BOX/out.txt")" "$(evidence)"
 assert_contains "sync-lock/remedy-is-last-line" "reset -q HEAD --" "$last" "$(evidence)"
+assert_contains "sync-lock/remedy-literal-pathspecs" "--literal-pathspecs" "$last" "$(evidence)"
 assert_not_contains "sync-lock/push-not-after-warning" "Push when ready" \
   "$(sed -n '/WARNING/,$p' "$BOX/out.txt")" "$(evidence)"
 assert_eq "sync-lock/index-stale-before-remedy" "2" "$(git -C "$VAULT" diff --cached --name-only HEAD | grep -c . || true)" "$(evidence)"

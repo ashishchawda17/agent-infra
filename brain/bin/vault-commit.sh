@@ -654,7 +654,7 @@ echo "  Push when ready: git -C \"$VAULT\" push"
 if [[ $sync_rc -eq 1 ]]; then
   echo "  WARNING: the shared index is locked and still holds the pre-commit versions"
   echo "  of the paths above (shown as staged reverts in git status). Run:"
-  printf '    git -C %q reset -q HEAD --' "$VAULT"
+  printf '    git --literal-pathspecs -C %q reset -q HEAD --' "$VAULT"
   printf ' %q' "${STAGED[@]}"
   echo
 fi

@@ -179,8 +179,9 @@ if [[ "$CUR_BRANCH" != "$DEFAULT" ]]; then
       refuse "could not switch from '$CUR_BRANCH' to '$DEFAULT'" \
         "  The shared index still holds the pre-commit versions of ${#stale[@]} path(s) the" \
         "  last commit on '$CUR_BRANCH' touched: vault-commit.sh's post-commit index sync" \
-        "  did not land (usually a held index.lock). Nothing was changed. Run, then re-run:" \
-        "$(printf '    git -C %q reset -q HEAD --' "$VAULT"; printf ' %q' "${stale[@]}")" \
+        "  did not land (usually a held index.lock). Nothing was changed. Unless you staged" \
+        "  a revert of these paths on purpose (that looks the same), run, then re-run:" \
+        "$(printf '    git --literal-pathspecs -C %q reset -q HEAD --' "$VAULT"; printf ' %q' "${stale[@]}")" \
         "  git said:" \
         "$(printf '    %s\n' "$sw_err")"
     fi
