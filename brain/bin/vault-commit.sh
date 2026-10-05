@@ -144,8 +144,9 @@
 #     the committed version. The sync is skipped once HEAD moves past this
 #     commit; a commit landing in the milliseconds between that check and the
 #     reset still gets a staged revert of its paths.
-#   - if the sync cannot take the index lock, the commit stands, and the output
-#     prints the runnable command that brings the shared index back in line.
+#   - if the sync cannot take the index lock within ~15 s, the commit stands, and
+#     the output's last lines print the runnable command that brings the shared
+#     index back in line (reap-branches.sh prints it too if the switch refuses).
 # `commit-tree` runs no hooks and signs only with -S, so step 8 runs the
 # pre-commit and commit-msg hooks itself (a secret scanner on core.hooksPath
 # must still see the commit) and passes commit.gpgsign on by hand.
@@ -620,8 +621,10 @@ printf '  %s\n' "${STAGED[@]}"
 # --- 9. bring the shared index in line, for the committed paths only --------
 # Until this runs, the shared index holds the pre-commit blobs for them, so
 # `git status` shows them as staged reverts. No vault commit can carry those
-# (step 5 bases on HEAD), but a raw `git commit` would. Retried: the lock is
-# usually held for milliseconds. Each try first checks that HEAD is still this
+# (step 5 bases on HEAD), but a raw `git commit` would. Retried for ~15 s: the
+# lock is usually held for milliseconds, but an editor's git watcher can hold it
+# for seconds right after a commit, and 0/1/2 s lost to one (INNOV-377). Each
+# try first checks that HEAD is still this
 # commit: once another commit lands on top, resetting to this one would stage a
 # revert of it, and that commit's own sync owns the index.
 # Returns 0 synced, 1 failed (lock), 2 skipped (HEAD is no longer this commit).
@@ -631,19 +634,28 @@ sync_index() {
   printf '%s\0' "${STAGED[@]}" | git --literal-pathspecs -C "$VAULT" \
     reset -q "$NEW" --pathspec-from-file=- --pathspec-file-nul >/dev/null 2>&1 || return 1
 }
-for delay in 0 1 2; do
-  sleep "$delay"
+# Short polls, not long sleeps: the lock is not held between tries, and every
+# gap is a window in which a raw `git commit` would record the staged revert.
+# At least 6 tries even when each git call is slow (Windows process spawn).
+tries=0
+sync_until=$((SECONDS + 15))
+while :; do
   sync_index; sync_rc=$?
-  [[ $sync_rc -eq 1 ]] || break
+  tries=$((tries + 1))
+  [[ $sync_rc -eq 1 && ( $tries -lt 6 || $SECONDS -lt $sync_until ) ]] || break
+  sleep 0.5
 done
-if [[ $sync_rc -eq 2 ]]; then
+[[ $sync_rc -eq 2 ]] &&
   echo "  NOTE: HEAD moved past this commit before the index sync; the index was left alone."
-elif [[ $sync_rc -eq 1 ]]; then
+echo "  Push when ready: git -C \"$VAULT\" push"
+# Last, so a caller reading only the head or the tail of the output still sees
+# it: printed before "Push when ready" it was missed, and the next symptom was
+# reap-branches.sh refusing to switch with an unrelated-looking git error.
+if [[ $sync_rc -eq 1 ]]; then
   echo "  WARNING: the shared index is locked and still holds the pre-commit versions"
   echo "  of the paths above (shown as staged reverts in git status). Run:"
-  printf '    git -C %q reset -q HEAD --' "$VAULT"
+  printf '    git --literal-pathspecs -C %q reset -q HEAD --' "$VAULT"
   printf ' %q' "${STAGED[@]}"
   echo
 fi
-echo "  Push when ready: git -C \"$VAULT\" push"
 exit 0

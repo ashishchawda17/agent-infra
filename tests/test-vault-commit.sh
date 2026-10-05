@@ -782,6 +782,64 @@ assert_eq "sync/index-matches-head" "0" "$(staged_count)" "staged: [$(staged_lis
 assert_eq "sync/no-private-index-left" "0" \
   "$(ls "$VAULT/.git" | grep -c '^vault-commit-index' || true)" "$(evidence)"
 
+# --- 21d5b. the sync outlasts a lock held across several tries (INNOV-377) ---
+# Observed: something on the machine held index.lock right after the commit, and
+# the old 0/1/2 s retries all lost to it. A `git` wrapper holds a real index.lock
+# around the first $1 sync calls (the pathspec-from-file reset), then gets out of
+# the way. 4 locked tries fails the old three-try loop: the negative control.
+make_lock_wrap() { # locked-tries
+  GIT_WRAP="$BOX/lockwrap"
+  mkdir -p "$GIT_WRAP"
+  cat >"$GIT_WRAP/git" <<SH
+#!/usr/bin/env bash
+case " \$* " in
+  *" reset "*"--pathspec-from-file=-"*)
+    n=\$(cat "$BOX/lockwrap/n" 2>/dev/null || echo 0)
+    if [[ \$n -lt $1 ]]; then
+      echo \$((n + 1)) >"$BOX/lockwrap/n"
+      : >"$VAULT/.git/index.lock"
+      "$REAL_GIT" "\$@"; rc=\$?
+      rm -f "$VAULT/.git/index.lock"
+      exit \$rc
+    fi ;;
+esac
+exec "$REAL_GIT" "\$@"
+SH
+  chmod +x "$GIT_WRAP/git"
+}
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+make_dirty
+make_lock_wrap 4
+run_guard -m "save"
+GIT_WRAP=""
+assert_eq "sync-lock/wrapper-fired" "4" "$(cat "$BOX/lockwrap/n" 2>/dev/null)" "$(evidence)"
+assert_eq "sync-lock/commits" "0" "$STATUS" "$(evidence)"
+assert_eq "sync-lock/lands-within-window" "0" "$(staged_count)" "staged: [$(staged_list | tr '\n' ' ')]" "$(evidence)"
+assert_not_contains "sync-lock/no-warning" "WARNING" "$(out_all)" "$(evidence)"
+
+# --- 21d5c. a lock that never clears: the WARNING and remedy print LAST ------
+# The caller reads the head of the output, and the warning used to sit before
+# "Push when ready", after the committed-path list. Now it is the tail, and the
+# printed remedy (the script's own --no-renames listing) actually clears it.
+sb_new "brain/work"
+GH_PATH="$GH_NONE"
+make_dirty
+echo "new" >"$VAULT/logs/new.md"
+make_lock_wrap 99
+run_guard -m "save"
+GIT_WRAP=""
+last="$(tail -n 1 "$BOX/out.txt" | tr -d '\r')"
+assert_eq "sync-lock/never-clears-commits" "0" "$STATUS" "$(evidence)"
+assert_contains "sync-lock/warning-in-tail" "WARNING" "$(tail -n 3 "$BOX/out.txt")" "$(evidence)"
+assert_contains "sync-lock/remedy-is-last-line" "reset -q HEAD --" "$last" "$(evidence)"
+assert_contains "sync-lock/remedy-literal-pathspecs" "--literal-pathspecs" "$last" "$(evidence)"
+assert_not_contains "sync-lock/push-not-after-warning" "Push when ready" \
+  "$(sed -n '/WARNING/,$p' "$BOX/out.txt")" "$(evidence)"
+assert_eq "sync-lock/index-stale-before-remedy" "2" "$(git -C "$VAULT" diff --cached --name-only HEAD | grep -c . || true)" "$(evidence)"
+eval "$last"
+assert_eq "sync-lock/remedy-clears-index" "0" "$(git -C "$VAULT" diff --cached --name-only HEAD | grep -c . || true)" "$(evidence)"
+
 # --- 21e. a staged RENAME out of a forbidden path is seen by its source -----
 # With rename detection, `diff --cached --name-only` prints only the destination,
 # so a rename chats/ -> logs/ read as an allowlisted logs/ path, and the commit
