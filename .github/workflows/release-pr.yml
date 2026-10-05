@@ -25,8 +25,10 @@ concurrency:
 
 jobs:
   release-pr:
-    # A manual run from another branch would publish that branch as a release.
-    if: github.ref == 'refs/heads/main'
+    # Source repo only: the vendsy/agent-infra mirror receives this file on
+    # every ff-push and must never open a release there. Main only: a manual
+    # run from another branch would publish that branch as a release.
+    if: github.repository == 'karch4162/agent-infra' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4

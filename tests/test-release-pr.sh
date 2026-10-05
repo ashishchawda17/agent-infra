@@ -252,7 +252,10 @@ assert_eq "ci/workflow-dispatch" "1" "$(grep -c '^  workflow_dispatch:' "$CI")"
 # mean that run never starts after a docs-only push.
 assert_eq "release/no-paths-filter" "0" "$(grep -c '^ *paths' "$REL")"
 # A manual dispatch from a feature branch must not publish that branch as a release.
-assert_eq "release/main-only" "1" "$(grep -c "if: github.ref == 'refs/heads/main'" "$REL")"
+assert_eq "release/main-only" "1" "$(grep -c "github.ref == 'refs/heads/main'" "$REL")"
+# The vendsy/agent-infra mirror receives this file on every ff-push and has
+# Actions on with PR creation allowed; it must never open a release there.
+assert_eq "release/source-repo-only" "1" "$(grep -c "if: github.repository == 'karch4162/agent-infra' && github.ref" "$REL")"
 assert_eq "release/runs-script" "1" "$(grep -c 'bash tools/release-pr.sh' "$REL")"
 
 echo
