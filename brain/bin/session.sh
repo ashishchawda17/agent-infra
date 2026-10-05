@@ -32,7 +32,7 @@
 #   BRAIN_ROOT=<vault> bash session.sh --status                # report, mutate nothing
 #   BRAIN_ROOT=<vault> bash session.sh --end                   # deregister THIS session, drop its hot-<id>.pin
 #   BRAIN_ROOT=<vault> bash session.sh --print-pin             # banner; its "  pin:" line is BRANCH:SHA for vault-commit.sh
-#   BRAIN_ROOT=<vault> bash session.sh --repin <old> <new>     # check-freshness.sh ONLY, see below
+#   BRAIN_ROOT=<vault> bash session.sh --repin <old> <new>     # check-freshness.sh and vault-commit.sh ONLY, see below
 #
 # Contract (callers and tests depend on exactly this):
 #   exit 0, stdout first line `SESSION: OK - <reason>`      => proceed
@@ -559,7 +559,7 @@ if [[ "$MODE" == "print-pin" ]]; then
 fi
 
 # --- --repin ----------------------------------------------------------------
-# INNOV-285. Called by check-freshness.sh ONLY, after it has ITSELF fast-forwarded
+# INNOV-285. Called by check-freshness.sh after it has ITSELF fast-forwarded
 # or merged the vault branch: that move is part of this session's own save, so the
 # pin recorded at --start must follow it — otherwise vault-commit.sh --pin refuses
 # every stale-branch save on the strength of a move the session made deliberately.

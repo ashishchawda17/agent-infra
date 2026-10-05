@@ -1233,6 +1233,55 @@ run_guard -m "no change" --pin "brain/work:$before" --pr-paths wiki/hot.md
 assert_eq "pr-paths/no-change-refused" "1" "$STATUS" "$(evidence)"
 assert_contains "pr-paths/no-change-reason" "no changes" "$(out_all)" "$(evidence)"
 
+# --- 47. INNOV-380: a commit advances this session's own pin -----------------
+# A save that needs a second commit (a hot.md budget trim) re-reads the pin with
+# --print-pin. Before the fix the record still held the pre-commit sha, so the
+# session's own first commit read as "HEAD moved" and the second was refused.
+SESSION_SH="$REPO_ROOT/brain/bin/session.sh"
+SID="vc-sess-380"
+run_guard_sid() { # [args...] — run_guard under this session's identity
+  (
+    cd "$VAULT" || exit 127
+    unset CLAUDE_PROJECT_DIR
+    export PATH="$GH_NONE:$PATH"
+    BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$GUARD" "$@"
+  ) >"$BOX/out.txt" 2>"$BOX/err.txt"
+  STATUS=$?
+}
+recorded_pin() {
+  BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$SESSION_SH" --print-pin 2>/dev/null \
+    | sed -n 's/^  pin: //p' | head -n 1 | tr -d '\r'
+}
+
+sb_new "main"
+BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$SESSION_SH" --start save >/dev/null 2>&1
+make_dirty
+run_guard_sid -m "save" --pin "$(recorded_pin)"
+assert_eq "repin/first-commit-ok" "0" "$STATUS" "$(evidence)"
+assert_eq "repin/pin-sha-is-new-head" "$(head_sha)" "$(p="$(recorded_pin)"; echo "${p#*:}")" "$(evidence)"
+echo "trimmed hot" >"$VAULT/wiki/hot.md"
+run_guard_sid -m "budget trim" --pin "$(recorded_pin)"
+assert_eq "repin/second-commit-ok" "0" "$STATUS" "$(evidence)"
+assert_eq "repin/second-commit-landed" "budget trim" "$(head_subject)" "$(evidence)"
+
+# --- 48. ...but a FOREIGN commit between them is still refused (negative control)
+# The repin follows only the move this run made; it must never adopt another
+# session's commit, or the moved-HEAD guard is gone.
+sb_new "main"
+BRAIN_ROOT="$VAULT" BRAIN_SESSION_ID="$SID" bash "$SESSION_SH" --start save >/dev/null 2>&1
+make_dirty
+run_guard_sid -m "save" --pin "$(recorded_pin)"
+assert_eq "repin-foreign/first-commit-ok" "0" "$STATUS" "$(evidence)"
+mine="$(head_sha)"
+echo "foreign" >>"$VAULT/wiki/hot.md"
+git -C "$VAULT" commit -qam "foreign session commit" >/dev/null 2>&1
+foreign="$(head_sha)"
+make_dirty
+run_guard_sid -m "must refuse" --pin "$(recorded_pin)"
+assert_eq "repin-foreign/second-commit-refused" "1" "$STATUS" "$(evidence)"
+assert_eq "repin-foreign/head-unmoved" "$foreign" "$(head_sha)" "$(evidence)"
+assert_eq "repin-foreign/pin-not-adopted" "$mine" "$(p="$(recorded_pin)"; echo "${p#*:}")" "$(evidence)"
+
 # ------------------------------------------------------------------ done ---
 echo
 echo "$PASSED passed, $FAILED failed"
