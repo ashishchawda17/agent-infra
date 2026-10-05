@@ -113,7 +113,7 @@ Resolve the vault as `$BRAIN_ROOT` (else cwd). **Pinned graphify version: `0.8.4
     - **Exit `0` (`SHADOW-INSTALL: OK`) →** ✅, quote the line.
     - **Exit `1` (`SHADOW-INSTALL: SHADOWED`) →** ❌ → **R9**. Relay the block **verbatim** — it names each install, its version, its scope, and the exact uninstall command.
     - **`SHADOW-INSTALL: SKIPPED` (exit `0`) →** ⚠️ "skipped — <reason>", never ✅.
-    - **A `STALE-MARKETPLACE: WARN` line (on any exit, INNOV-336) →** ⚠️ **advisory, no scripted repair** — a second brain-family marketplace is registered (e.g. `tray-brain-marketplace` after the fork was archived) with no plugin live from it. Inert today, but it never updates and a later enable brings back a shadow. Relay it **verbatim**; it names the registration and the `claude plugin marketplace remove` command. Never run it for the user: it touches global config.
+    - **A `STALE-MARKETPLACE: WARN` line (on any exit; not when node is missing, INNOV-336) →** ⚠️ **advisory, no scripted repair** — a second brain-family marketplace is registered (e.g. `tray-brain-marketplace` after the fork was archived) with no plugin live from it. Inert today, but it never updates and a later enable brings back a shadow. Relay it **verbatim**; it names the registration and the `claude plugin marketplace remove` command. Never run it for the user: it touches global config.
 13. **Vault command prefix (INNOV-318)** — the vault's `CLAUDE.md` naming a brain-family namespace other than the installed one (`/tray-brain:save` under a `brain` install).
     ```bash
     bash "${CLAUDE_PLUGIN_ROOT}/bin/check-command-prefix.sh"   # from the vault root, or with BRAIN_ROOT=<vault> set

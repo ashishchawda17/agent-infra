@@ -32,7 +32,7 @@
 #              scope, and the exact uninstall command. Nothing is uninstalled.
 # First line: "SHADOW-INSTALL: OK" / "SHADOW-INSTALL: SKIPPED" (stdout) or
 # "SHADOW-INSTALL: SHADOWED" (stderr).
-# Under any verdict, a "STALE-MARKETPLACE: WARN" advisory (stdout) names each
+# Under any verdict node can reach, a "STALE-MARKETPLACE: WARN" advisory (stdout) names each
 # registered brain-family marketplace no live install comes from, when more than
 # one is registered (INNOV-336). Registered = known_marketplaces.json or
 # extraKnownMarketplaces; brain-family = its clone lists a brain-family plugin,
