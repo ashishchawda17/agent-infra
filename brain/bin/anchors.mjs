@@ -288,11 +288,11 @@ export function classifyAnchors(ctx, note) {
 
     // Cross-check the note's wiki area against the repo the anchor resolves
     // into — BEFORE any file check, because the dangerous direction is a FALSE
-    // GREEN: a `docs/x.md` anchor in wiki/tray-insight/ resolving into
-    // tray-architecture (the `docs` alias) verifies healthy whenever a
+    // GREEN: a `docs/x.md` anchor in wiki/team-insight/ resolving into
+    // team-architecture (the `docs` alias) verifies healthy whenever a
     // same-named file exists there, and nothing else will ever surface it.
     // Different remotes is the signal; existence of the file is moot. The fix is
-    // a qualified anchor (`tray-insight/docs/x.md`), never a note edit to
+    // a qualified anchor (`team-insight/docs/x.md`), never a note edit to
     // whatever path the alias happens to point at.
     {
       const areaM = rel.match(/^wiki\/([^/]+)\//);
