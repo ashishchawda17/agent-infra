@@ -15,7 +15,7 @@ WAVE_CONFIG="$ROOT/.claude/wave/config.env"
 WAVE_NOTES_FILE="$ROOT/.claude/wave/notes.md"
 
 [ -f "$WAVE_CONFIG" ] || {
-  echo "wave: no $WAVE_CONFIG - copy $WAVE_HOME/config.example.env there and fill it in" >&2
+  echo "wave: no $WAVE_CONFIG - write one with: bash $WAVE_HOME/bootstrap.sh --label <repo-label>" >&2
   exit 1
 }
 # shellcheck disable=SC1090
