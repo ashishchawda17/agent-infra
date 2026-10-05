@@ -62,6 +62,7 @@ for p in $plugins; do
   branch="release/$p"
   title="$(git log -1 --format=%s "$branch")"
   frags="$(git diff --name-only --diff-filter=D "$BASE" "$branch" -- ".bumps/$p/" | sed "s|^\.bumps/$p/||")"
+  sha="$(git rev-parse "$branch")"
   git push -q --force origin "$branch:refs/heads/$branch"
   runs="${GITHUB_SERVER_URL:-https://github.com}/${GITHUB_REPOSITORY:-}/actions/workflows/ci.yml?query=branch%3Arelease%2F$p"
 
@@ -70,7 +71,7 @@ Automated by \`.github/workflows/release-pr.yml\` (INNOV-330): \`node tools/bump
 
 $(printf '%s\n' "$frags" | sed 's/^/- /')
 
-**Checks are not on this PR.** A \`GITHUB_TOKEN\` PR starts no \`pull_request\` run, so CI is dispatched on the branch instead, and a dispatched run does not attach to the PR. Merge once \`tests\` is green on both runners here: $runs
+**Checks are not on this PR.** A \`GITHUB_TOKEN\` PR starts no \`pull_request\` run, so CI is dispatched on the branch instead, and a dispatched run does not attach to the PR. Merge once the \`tests\` run for release commit \`$sha\` is green on both runners: $runs. The branch is force-pushed on every rebuild, so a green run for an older commit does not count.
 
 After merging:
 1. Tag the **merge commit**, not this branch's commit.
@@ -79,7 +80,9 @@ After merging:
 This branch is rebuilt from \`main\` whenever \`.bumps/\` changes there, so hand edits here are overwritten. To hold a release, leave this PR open. Closing it opens a fresh one on the next fragment push.
 EOF
 )"
-  open="$(gh pr list --head "$branch" --base main --state open --json number --jq '.[0].number')"
+  # --head matches the branch name only; a fork can open a PR from its own
+  # release/<plugin>, so take only a PR from this repo.
+  open="$(gh pr list --head "$branch" --base main --state open --json number,isCrossRepository --jq '[.[] | select(.isCrossRepository | not)][0].number // empty')"
   if [ -n "$open" ]; then
     gh pr edit "$open" --title "$title" --body "$body"
     echo "release-pr: $title, updated PR #$open."

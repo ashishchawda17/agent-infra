@@ -124,6 +124,9 @@ assert_contains "brain/pr-title-has-version" "$log" "0.3.9"
 assert_contains "brain/pr-body-names-fragment" "$log" "INNOV-1"
 assert_eq "brain/one-create" "1" "$(grep -c '^pr create' "$GH_LOG")"
 assert_contains "brain/pr-body-links-ci-runs" "$log" "actions/workflows/ci.yml?query=branch%3Arelease%2Fbrain"
+# A fork PR whose head is also named release/brain must never be adopted.
+assert_contains "brain/pr-lookup-skips-forks" "$log" "select(.isCrossRepository | not)"
+assert_contains "brain/pr-body-names-release-sha" "$log" "$(git -C "$ORIGIN" rev-parse release/brain)"
 assert_eq "brain/ci-dispatched" "1" "$(grep -c '^workflow run ci.yml --ref release/brain' "$GH_LOG")"
 
 echo "--- 3. rerun with the PR open: branch rebuilt on new main, PR edited, no second PR ---"
