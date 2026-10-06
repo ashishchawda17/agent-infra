@@ -10,11 +10,15 @@
 # Contract under test:
 #   a mirror listed in repos.json resolves through its git remote to the checkout
 #     ROOT; sessions started there land in chats/<root label>/, where the label is
-#     the repos.json entry with no subPath, else the checkout folder name
+#     the repos.json entry with no subPath, else the repo name from the remote
+#     (never the clone folder name, which differs per machine)
 #   sessions started inside a mirror's subPath land in chats/<mirror>/
 #   several mirrors sharing one checkout harvest it once (no duplicates)
-#   a mirror with no repos.json entry keeps the old REPOS_DIR/<mirror> layout
-#   a run that finds nothing names the sources it looked for, instead of silence
+#   REPOS_DIR/<mirror> is always a source too: the only one for a mirror with no
+#     repos.json entry, and the old location of a since-renamed clone
+#   a vault with no repos.json harvests exactly as before
+#   a mirror with no session folder anywhere is named in a warning (exit 0), even
+#     when other sources harvested; a mirror found at its root is not
 #
 # Run:  bash tests/test-harvest-chats.sh   (from anywhere)
 # No network: remotes are bogus URLs matched by git-config string only. HOME is
@@ -41,6 +45,10 @@ assert_file() { # name path
 }
 assert_contains() { # name needle haystack
   if [[ "$3" == *"$2"* ]]; then pass "$1"; else fail "$1" "expected to contain: [$2]" "actual: [$3]"; fi
+}
+
+assert_lacks() { # name needle haystack
+  if [[ "$3" != *"$2"* ]]; then pass "$1"; else fail "$1" "expected NOT to contain: [$2]" "actual: [$3]"; fi
 }
 
 # Claude Code's project-folder name for a directory, computed by node from the
@@ -95,14 +103,41 @@ mkdir -p "$VAULT/wiki" "$VAULT/graphify/app-web"
 checkout "$W/app-checkout" "https://github.com/example/app.git" web
 printf '{ "repos": { "app-web": { "remote": "github.com/example/app", "subPath": "web" } } }\n' > "$VAULT/repos.json"
 session "$HOME/.claude/projects/$(enc "$W/app-checkout")" dddddddd-root
-run >/dev/null
-assert_file "root label falls back to the checkout folder name" "$VAULT/chats/app-checkout/2026-10-01-dddddddd.md"
+out="$(run)"
+assert_file "root label falls back to the remote's repo name, not the clone folder" "$VAULT/chats/app/2026-10-01-dddddddd.md"
+assert_lacks "a subPath mirror whose sessions are at the root is not warned about" "warn:" "$out"
 
 # ------------------------------------------- case 3: nothing found is loud ---
 W="$TMPROOT/c3"; VAULT="$W/vault"; export HOME="$W/home"
 mkdir -p "$VAULT/wiki" "$VAULT/graphify/ghost" "$HOME/.claude/projects"
 out="$(run)"
 assert_contains "an empty run names the sources it looked for" "ghost" "$out"
+
+# ------------------- case 4: no repos.json; one mirror missing, others found ---
+W="$TMPROOT/c4"; VAULT="$W/vault"; export HOME="$W/home"
+mkdir -p "$VAULT/wiki" "$VAULT/graphify/solo" "$VAULT/graphify/ghost" "$W/solo"
+session "$HOME/.claude/projects/$(enc "$W/solo")" eeeeeeee-solo
+session "$HOME/.claude/projects/$(enc "$VAULT")" ffffffff-vault
+out="$(run)"; rc=$?
+assert_file "no repos.json: a mirror harvests from REPOS_DIR/<mirror>" "$VAULT/chats/solo/2026-10-01-eeeeeeee.md"
+assert_file "no repos.json: the vault's own sessions are harvested" "$VAULT/chats/vault/2026-10-01-ffffffff.md"
+assert_contains "a missing mirror is warned about although others harvested" "warn: no Claude Code sessions found for: ghost (looked for " "$out"
+assert_lacks "a mirror that was found is not in the warning" "solo (looked for" "$out"
+[[ $rc -eq 0 ]] && pass "the warning does not change the exit code" || fail "the warning does not change the exit code" "exit: $rc"
+
+# --------- case 5: clone renamed since the mirror was named (CRLF repos.json) ---
+W="$TMPROOT/c5"; VAULT="$W/vault"; export HOME="$W/home"
+mkdir -p "$VAULT/wiki" "$VAULT/graphify/plug" "$W/plug"
+checkout "$W/renamed" "https://github.com/example/renamed.git"
+printf '{ "repos": {
+  "plug": { "remote": "github.com/example/renamed" }
+} }
+' > "$VAULT/repos.json"
+session "$HOME/.claude/projects/$(enc "$W/renamed")" 11111111-new
+session "$HOME/.claude/projects/$(enc "$W/plug")" 22222222-old
+run >/dev/null
+assert_file "sessions under the resolved checkout land under the mirror" "$VAULT/chats/plug/2026-10-01-11111111.md"
+assert_file "sessions under the old REPOS_DIR/<mirror> folder are still harvested" "$VAULT/chats/plug/2026-10-01-22222222.md"
 
 echo
 echo "harvest-chats: $PASSED passed, $FAILED failed"

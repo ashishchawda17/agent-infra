@@ -11,8 +11,9 @@
 // The VAULT is resolved from $BRAIN_ROOT (→ $CLAUDE_PROJECT_DIR → cwd) or --vault.
 // Covered repos are auto-derived from the vault's graphify/<repo>/ mirror folders
 // (no hardcoded repo list), resolved to checkouts through the vault's repos.json (by git
-// remote, so sub-path mirrors map to their shared checkout root), falling back to
-// $REPOS_DIR/<mirror> (default vault/..) for mirrors repos.json does not list.
+// remote, so sub-path mirrors map to their shared checkout root). $REPOS_DIR/<mirror>
+// (default vault/..) is always tried as well: it is the only location for mirrors
+// repos.json does not list, and it keeps sessions from a since-renamed clone.
 // The Claude Code project-dir name is computed generically from each absolute path
 // (drive colon + path separators → '-'), instead of a hardcoded per-machine prefix.
 //
@@ -26,7 +27,7 @@
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { join, basename, resolve } from 'node:path';
-import { resolveRepos } from './resolve-repos.mjs';
+import { resolveRepos, normalizeRemote } from './resolve-repos.mjs';
 
 const argv = process.argv.slice(2);
 const argVal = (flag) => (argv.indexOf(flag) >= 0 ? argv[argv.indexOf(flag) + 1] : undefined);
@@ -66,22 +67,31 @@ const REPOS_DIR = process.env.REPOS_DIR
 // anchor checker does. A mirror can be a SUB-PATH of a larger checkout (hub-frontend
 // → hub/frontend), and Claude Code sessions run at the checkout ROOT, so the root is
 // what holds the transcripts. Mirrors sharing a checkout harvest it once, labelled by
-// the repos.json entry that IS the root (no subPath), else the checkout folder name.
+// the repos.json entry that IS the root (no subPath), else the repo name from the
+// remote. Never the clone folder name: `monorepo-4` on one machine and `monorepo` on
+// another must write to the same chats/ folder.
 // Sessions started inside the sub-path still land under the mirror's own label.
-// Mirrors with no repos.json entry keep the old REPOS_DIR/<mirror> layout.
+// REPOS_DIR/<mirror> stays a source for every mirror (see the header).
 const { identity, meta } = resolveRepos(VAULT, [REPOS_DIR, join(VAULT, '..')]);
-const rootLabel = (root) => {
-  for (const [name, m] of meta) if (m.root === root && !m.subPath && identity?.[name]) return name;
-  return basename(root);
+const rootLabel = (mirror, m) => {
+  for (const [name, o] of meta) if (o.root === m.root && !o.subPath) return name;
+  return normalizeRemote(identity[mirror]?.remote)?.split('/').pop() || basename(m.root);
 };
 
 const byEnc = new Map(); // project-folder name → source; dedupes shared checkouts
-const addSource = (label, dir) => { const enc = encode(dir); if (!byEnc.has(enc)) byEnc.set(enc, { label, enc }); };
+const lookedFor = new Map(); // mirror → every project-folder name tried for it
+const addSource = (label, dir, mirror) => {
+  const enc = encode(dir);
+  if (!byEnc.has(enc)) byEnc.set(enc, { label, enc });
+  if (mirror) lookedFor.set(mirror, (lookedFor.get(mirror) || new Set()).add(enc));
+};
 for (const r of COVERED) {
   const m = meta.get(r);
-  if (!m) { addSource(r, join(REPOS_DIR, r)); continue; }
-  addSource(rootLabel(m.root), m.root);
-  if (m.subPath) addSource(r, join(m.root, m.subPath));
+  if (m) {
+    addSource(rootLabel(r, m), m.root, r);
+    if (m.subPath) addSource(r, join(m.root, m.subPath), r);
+  }
+  addSource(r, join(REPOS_DIR, r), r);
 }
 // the vault itself (its own sessions — e.g. ventures / brain-maintenance work)
 addSource(basename(VAULT), VAULT);
@@ -181,10 +191,9 @@ if (!existsSync(PROJECTS)) {
   process.exit(0);
 }
 
-const missing = [];
 for (const src of sources) {
   const dir = join(PROJECTS, src.enc);
-  if (!existsSync(dir)) { missing.push(src.label); continue; }
+  if (!existsSync(dir)) continue;
   const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
   for (const f of files) {
     const full = join(dir, f);
@@ -216,8 +225,10 @@ if (!DRY) { mkdirSync(join(VAULT, 'chats'), { recursive: true }); writeFileSync(
 console.log(`${DRY ? '[dry-run] ' : ''}Harvested ${harvested} session(s), skipped ${skipped} (unchanged/trivial).`);
 for (const s of summary.slice(0, 30)) console.log(`  ${s}`);
 if (summary.length > 30) console.log(`  …and ${summary.length - 30} more`);
-// An empty run must say where it looked: a silent "0 sessions" hid a whole repo once.
-if (!harvested && !skipped && missing.length)
-  console.log(`No Claude Code sessions found for: ${missing.join(', ')} (looked in ${PROJECTS}).`);
+// A mirror with no session folder at any of its locations is named, even when other
+// sources harvested fine: a silent skip hid a whole repo once. Warning only.
+const missing = [...lookedFor].filter(([, encs]) => ![...encs].some((e) => existsSync(join(PROJECTS, e))));
+if (missing.length)
+  console.error(`warn: no Claude Code sessions found for: ${missing.map(([r, encs]) => `${r} (looked for ${[...encs].join(', ')})`).join('; ')}`);
 if (harvested && !DRY) console.log(`\nNext: review chats/, then /brain:wiki-ingest to distill durable facts into draft notes.`);
 process.exit(0);
