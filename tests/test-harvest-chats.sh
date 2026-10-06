@@ -51,9 +51,11 @@ assert_lacks() { # name needle haystack
   if [[ "$3" != *"$2"* ]]; then pass "$1"; else fail "$1" "expected NOT to contain: [$2]" "actual: [$3]"; fi
 }
 
-# Claude Code's project-folder name for a directory, computed by node from the
-# NATIVE cwd so it matches the script on Windows too.
-enc() { (cd "$1" && node -e "console.log(process.cwd().replace(/[:\\\\/]/g,'-'))"); }
+# Claude Code's project-folder name for a directory, computed by node from the path
+# ARGUMENT exactly as harvest-chats.mjs computes it from --vault. Not from
+# process.cwd(): on a Windows runner the temp dir is an 8.3 short path
+# (C:\Users\RUNNER~1\...), cwd() returns the long form, and the two names differ.
+enc() { node -e "console.log(require('node:path').resolve(process.argv[1]).replace(/[:\\\\/]/g,'-'))" "$1"; }
 
 # A minimal two-turn session transcript.
 session() { # dir id
