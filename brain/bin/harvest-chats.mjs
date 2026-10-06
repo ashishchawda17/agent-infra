@@ -10,7 +10,9 @@
 //
 // The VAULT is resolved from $BRAIN_ROOT (→ $CLAUDE_PROJECT_DIR → cwd) or --vault.
 // Covered repos are auto-derived from the vault's graphify/<repo>/ mirror folders
-// (no hardcoded repo list), resolved to checkouts under $REPOS_DIR (default vault/..).
+// (no hardcoded repo list), resolved to checkouts through the vault's repos.json (by git
+// remote, so sub-path mirrors map to their shared checkout root), falling back to
+// $REPOS_DIR/<mirror> (default vault/..) for mirrors repos.json does not list.
 // The Claude Code project-dir name is computed generically from each absolute path
 // (drive colon + path separators → '-'), instead of a hardcoded per-machine prefix.
 //
@@ -24,6 +26,7 @@
 
 import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, statSync } from 'node:fs';
 import { join, basename, resolve } from 'node:path';
+import { resolveRepos } from './resolve-repos.mjs';
 
 const argv = process.argv.slice(2);
 const argVal = (flag) => (argv.indexOf(flag) >= 0 ? argv[argv.indexOf(flag) + 1] : undefined);
@@ -59,10 +62,31 @@ const REPOS_DIR = process.env.REPOS_DIR
   ? process.env.REPOS_DIR.replace(/^~/, HOME || '~')
   : ([join(VAULT, '..'), join(VAULT, '..', '..')].find((c) => COVERED.some((r) => existsSync(join(c, r)))) || join(VAULT, '..'));
 
-const sources = COVERED.map((r) => ({ label: r, enc: encode(join(REPOS_DIR, r)) }));
+// Resolve each mirror through repos.json (identity by git remote), the same way the
+// anchor checker does. A mirror can be a SUB-PATH of a larger checkout (hub-frontend
+// → hub/frontend), and Claude Code sessions run at the checkout ROOT, so the root is
+// what holds the transcripts. Mirrors sharing a checkout harvest it once, labelled by
+// the repos.json entry that IS the root (no subPath), else the checkout folder name.
+// Sessions started inside the sub-path still land under the mirror's own label.
+// Mirrors with no repos.json entry keep the old REPOS_DIR/<mirror> layout.
+const { identity, meta } = resolveRepos(VAULT, [REPOS_DIR, join(VAULT, '..')]);
+const rootLabel = (root) => {
+  for (const [name, m] of meta) if (m.root === root && !m.subPath && identity?.[name]) return name;
+  return basename(root);
+};
+
+const byEnc = new Map(); // project-folder name → source; dedupes shared checkouts
+const addSource = (label, dir) => { const enc = encode(dir); if (!byEnc.has(enc)) byEnc.set(enc, { label, enc }); };
+for (const r of COVERED) {
+  const m = meta.get(r);
+  if (!m) { addSource(r, join(REPOS_DIR, r)); continue; }
+  addSource(rootLabel(m.root), m.root);
+  if (m.subPath) addSource(r, join(m.root, m.subPath));
+}
 // the vault itself (its own sessions — e.g. ventures / brain-maintenance work)
-sources.push({ label: basename(VAULT), enc: encode(VAULT) });
-if (INCLUDE_PARENT) sources.push({ label: basename(REPOS_DIR) || 'parent', enc: encode(REPOS_DIR) });
+addSource(basename(VAULT), VAULT);
+if (INCLUDE_PARENT) addSource(basename(REPOS_DIR) || 'parent', REPOS_DIR);
+const sources = [...byEnc.values()];
 
 const MANIFEST = join(VAULT, 'chats', '.harvest-manifest.json');
 const manifest = existsSync(MANIFEST) ? JSON.parse(readFileSync(MANIFEST, 'utf8')) : {};
@@ -157,9 +181,10 @@ if (!existsSync(PROJECTS)) {
   process.exit(0);
 }
 
+const missing = [];
 for (const src of sources) {
   const dir = join(PROJECTS, src.enc);
-  if (!existsSync(dir)) continue;
+  if (!existsSync(dir)) { missing.push(src.label); continue; }
   const files = readdirSync(dir).filter((f) => f.endsWith('.jsonl'));
   for (const f of files) {
     const full = join(dir, f);
@@ -191,5 +216,8 @@ if (!DRY) { mkdirSync(join(VAULT, 'chats'), { recursive: true }); writeFileSync(
 console.log(`${DRY ? '[dry-run] ' : ''}Harvested ${harvested} session(s), skipped ${skipped} (unchanged/trivial).`);
 for (const s of summary.slice(0, 30)) console.log(`  ${s}`);
 if (summary.length > 30) console.log(`  …and ${summary.length - 30} more`);
+// An empty run must say where it looked: a silent "0 sessions" hid a whole repo once.
+if (!harvested && !skipped && missing.length)
+  console.log(`No Claude Code sessions found for: ${missing.join(', ')} (looked in ${PROJECTS}).`);
 if (harvested && !DRY) console.log(`\nNext: review chats/, then /brain:wiki-ingest to distill durable facts into draft notes.`);
 process.exit(0);
